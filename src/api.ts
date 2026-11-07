@@ -89,7 +89,7 @@ export const cutPart = (
   connectors: ConnectorOptions,
 ) => invoke<ActionResult>("cut_part", { partId, axis, position, connectors });
 
-export const autoSplit = (ids: number[] | null, connectors: boolean) =>
+export const autoSplit = (ids: number[] | null, connectors: ConnectorOptions) =>
   invoke<ActionResult>("auto_split", { ids, connectors });
 
 export const transformPart = (partId: number, op: TransformOp) =>

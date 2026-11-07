@@ -120,7 +120,12 @@ pub async fn preview_mesh(
             .ok_or_else(|| "Pièce introuvable.".to_string())?;
         let mesh = part.mesh.clone();
         drop(guard);
-        let mut buf = Vec::with_capacity(8 + mesh.positions.len() * 12 + mesh.indices.len() * 4);
+        let vertex_colors = mesh.vertex_colors_rgb();
+        let mut buf = Vec::with_capacity(
+            8 + mesh.positions.len() * 12
+                + mesh.indices.len() * 4
+                + vertex_colors.len() * 3,
+        );
         buf.extend_from_slice(&(mesh.positions.len() as u32).to_le_bytes());
         buf.extend_from_slice(&(mesh.indices.len() as u32).to_le_bytes());
         for p in &mesh.positions {
@@ -130,6 +135,9 @@ pub async fn preview_mesh(
         }
         for i in &mesh.indices {
             buf.extend_from_slice(&i.to_le_bytes());
+        }
+        for color in &vertex_colors {
+            buf.extend_from_slice(color);
         }
         Ok::<Vec<u8>, String>(buf)
     })
@@ -159,7 +167,7 @@ pub async fn cut_part(
 pub async fn auto_split(
     state: State<'_, WorkspaceState>,
     ids: Option<Vec<u64>>,
-    connectors: bool,
+    connectors: ConnectorOptions,
 ) -> Result<ActionResult, String> {
     let ws = state.0.clone();
     tauri::async_runtime::spawn_blocking(move || {

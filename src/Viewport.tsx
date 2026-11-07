@@ -55,6 +55,7 @@ interface Entry {
   index: number;
   token: number;
   explode: THREE.Vector3;
+  colored: boolean;
 }
 
 interface EngineApi {
@@ -67,7 +68,7 @@ interface EngineApi {
   dispose: () => void;
 }
 
-function parseGeometry(buffer: ArrayBuffer): THREE.BufferGeometry {
+function parseGeometry(buffer: ArrayBuffer): { geometry: THREE.BufferGeometry; colored: boolean } {
   const view = new DataView(buffer);
   const vertexCount = view.getUint32(0, true);
   const indexCount = view.getUint32(4, true);
@@ -77,10 +78,19 @@ function parseGeometry(buffer: ArrayBuffer): THREE.BufferGeometry {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
   geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+  const colorOffset = indexOffset + indexCount * 4;
+  const colored = buffer.byteLength >= colorOffset + vertexCount * 3;
+  if (colored) {
+    const colors = new Uint8Array(buffer, colorOffset, vertexCount * 3);
+    geometry.setAttribute(
+      "color",
+      new THREE.BufferAttribute(colors, 3, true),
+    );
+  }
   geometry.computeVertexNormals();
   geometry.computeBoundingBox();
   geometry.computeBoundingSphere();
-  return geometry;
+  return { geometry, colored };
 }
 
 function disposeMaterial(material: THREE.Material | THREE.Material[] | undefined) {
@@ -188,10 +198,12 @@ function createEngine(
         const buffer = await previewMesh(job.part.id);
         if (disposed) break;
         if (entries.get(job.part.id) !== job.entry || job.entry.token !== job.token) continue;
-        const geometry = parseGeometry(buffer);
+        const parsed = parseGeometry(buffer);
         const previous = job.entry.mesh.geometry;
-        job.entry.mesh.geometry = geometry;
-        if (previous && previous !== geometry) previous.dispose();
+        job.entry.mesh.geometry = parsed.geometry;
+        job.entry.colored = parsed.colored;
+        styleEntry(job.entry);
+        if (previous && previous !== parsed.geometry) previous.dispose();
       } catch (error) {
         if (!disposed) console.error("Aperçu indisponible", error);
       } finally {
@@ -203,7 +215,19 @@ function createEngine(
 
   function styleEntry(entry: Entry) {
     const selected = selectedId !== null && entry.part.id === selectedId;
-    entry.material.color.set(selected ? SELECTED_COLOR : partColorAt(entry.index));
+    if (entry.material.vertexColors !== entry.colored) {
+      entry.material.vertexColors = entry.colored;
+      entry.material.needsUpdate = true;
+    }
+    // Un modèle coloré conserve ses couleurs même sélectionné : la sélection
+    // est signalée par l'émission, pas par une teinte qui fausserait la palette.
+    entry.material.color.set(
+      entry.colored
+        ? "#ffffff"
+        : selected
+          ? SELECTED_COLOR
+          : partColorAt(entry.index),
+    );
     entry.material.emissive.set(selected ? "#583600" : "#000000");
     entry.material.emissiveIntensity = selected ? 0.9 : 0;
     entry.mesh.visible = !hidden.has(entry.part.id);
@@ -215,6 +239,7 @@ function createEngine(
       metalness: 0.06,
       roughness: 0.7,
       flatShading: true,
+      vertexColors: false,
       polygonOffset: true,
       polygonOffsetFactor: 1,
       polygonOffsetUnits: 1,
@@ -231,6 +256,7 @@ function createEngine(
       index,
       token: 0,
       explode: new THREE.Vector3(),
+      colored: false,
     };
     return entry;
   }

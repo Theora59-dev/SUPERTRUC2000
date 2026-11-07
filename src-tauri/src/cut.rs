@@ -216,21 +216,17 @@ pub fn cut_mesh(mesh: &Mesh, plane: &Plane, opts: &CutOptions) -> Result<CutResu
     let mut used_connector_options: Option<(f64, f64, f64)> = None; // radius, depth, clearance
 
     if opts.connectors.enabled && !pos_regions.is_empty() {
-        let (mut radius, mut count) = if opts.connectors.auto {
-            auto_connector_params(cap_area)
+        // La taille demandée par l'utilisateur est toujours respectée ; le
+        // placement automatique ne détermine que le nombre de tenons.
+        let (_, auto_count) = auto_connector_params(cap_area);
+        let radius = opts.connectors.radius.clamp(0.5, 50.0);
+        let count = if opts.connectors.auto {
+            auto_count.max(1)
         } else {
-            (
-                opts.connectors.radius.clamp(0.5, 50.0),
-                opts.connectors.count.clamp(1, 32),
-            )
+            opts.connectors.count.clamp(1, 32)
         };
 
-        let mut points = sample_points(&pos_loops, &pos_regions, radius, count);
-        if points.is_empty() && opts.connectors.auto && radius > 1.0 {
-            radius = (radius * 0.6).max(1.0);
-            count = count.min(4);
-            points = sample_points(&pos_loops, &pos_regions, radius, count);
-        }
+        let points = sample_points(&pos_loops, &pos_regions, radius, count);
 
         if points.is_empty() {
             warnings.push(
@@ -240,7 +236,7 @@ pub fn cut_mesh(mesh: &Mesh, plane: &Plane, opts: &CutOptions) -> Result<CutResu
         } else {
             connector_count = points.len();
             connector_radius = radius;
-            let clearance = opts.connectors.clearance.clamp(0.0, 1.0);
+            let clearance = opts.connectors.clearance.clamp(0.0, 2.0);
             let depth = opts.connectors.depth.clamp(1.0, 100.0);
             let hole_radius = radius + clearance;
             let hole_segments = circle_segments(hole_radius);

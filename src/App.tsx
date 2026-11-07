@@ -90,6 +90,19 @@ const AXES: Axis[] = ["x", "y", "z"];
 const AXIS_INDEX: Record<Axis, number> = { x: 0, y: 1, z: 2 };
 const MAX_PIECES = 256;
 
+type MaterialId = "pla" | "petg" | "abs" | "asa" | "tpu";
+
+const MATERIALS: Array<{ id: MaterialId; label: string; density: number }> = [
+  { id: "pla", label: "PLA", density: 1.24 },
+  { id: "petg", label: "PETG", density: 1.27 },
+  { id: "abs", label: "ABS", density: 1.04 },
+  { id: "asa", label: "ASA", density: 1.07 },
+  { id: "tpu", label: "TPU", density: 1.21 },
+];
+
+const FILAMENT_DIAMETER = 1.75;
+const PERIMETER_THICKNESS = 1.2;
+
 const number = new Intl.NumberFormat("fr-FR");
 const fmtInt = (value: number) => number.format(Math.round(value));
 const fmt1 = (value: number) =>
@@ -255,6 +268,8 @@ export default function App() {
   const [scalePercent, setScalePercent] = useState(100);
   const [targetHeight, setTargetHeight] = useState(0);
   const [wallThickness, setWallThickness] = useState(2);
+  const [filamentMaterial, setFilamentMaterial] = useState<MaterialId>("pla");
+  const [infillPercent, setInfillPercent] = useState(15);
 
   // Export
   const [format, setFormat] = useState<ExportFormat>("stl");
@@ -294,6 +309,26 @@ export default function App() {
     () => autoTargets.reduce((total, part) => total + pieceCount(part, bed), 0),
     [autoTargets, bed],
   );
+
+  const filament = useMemo(() => {
+    const density =
+      MATERIALS.find((material) => material.id === filamentMaterial)?.density ?? 1.24;
+    const infill = clamp(infillPercent, 0, 100) / 100;
+    let materialMm3 = 0;
+    for (const part of parts) {
+      // Coque extérieure imprimée en périmètres pleins, intérieur selon le
+      // taux de remplissage choisi.
+      const perimeter = Math.min(part.area * PERIMETER_THICKNESS, part.volume);
+      const interior = Math.max(part.volume - perimeter, 0);
+      materialMm3 += perimeter + interior * infill;
+    }
+    const areaSection = Math.PI * (FILAMENT_DIAMETER / 2) ** 2;
+    return {
+      volumeCm3: materialMm3 / 1000,
+      massG: (materialMm3 / 1000) * density,
+      lengthM: materialMm3 / areaSection / 1000,
+    };
+  }, [parts, filamentMaterial, infillPercent]);
 
   const pushToast = useCallback(
     (kind: ToastKind, title: string, details?: string[]) => {
@@ -571,7 +606,7 @@ export default function App() {
     if (parts.length === 0) return;
     const ids =
       autoScope === "selected" && selectedId !== null ? [selectedId] : null;
-    void run("Découpe automatique en cours…", () => autoSplit(ids, autoConnectors), (result) => {
+    void run("Découpe automatique en cours…", () => autoSplit(ids, { ...connectors, enabled: autoConnectors }), (result) => {
       applyResult(result);
       requestView("fit");
     });
@@ -580,6 +615,7 @@ export default function App() {
     autoScope,
     selectedId,
     autoConnectors,
+    connectors,
     run,
     applyResult,
     requestView,
@@ -915,6 +951,9 @@ export default function App() {
           </span>
           <span>
             Volume <b>{fmtVolume(ws.totalVolume)}</b>
+          </span>
+          <span>
+            Filament <b>{fmt1(filament.massG)} g</b>
           </span>
         </div>
       </header>
@@ -1264,60 +1303,64 @@ export default function App() {
                             label="Placement automatique des connecteurs"
                           />
                         </div>
-                        {!connectors.auto ? (
-                          <div
-                            style={{
-                              display: "grid",
-                              gridTemplateColumns: "1fr 1fr",
-                              gap: 8,
-                              marginTop: 8,
-                            }}
-                          >
+                        <div
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "1fr 1fr",
+                            gap: 8,
+                            marginTop: 8,
+                          }}
+                        >
+                          {!connectors.auto ? (
                             <NumberField
                               label="Nombre"
                               value={connectors.count}
                               min={1}
-                              max={12}
+                              max={32}
                               step={1}
                               unit=""
                               onChange={(value) =>
                                 patchConnectors({
-                                  count: Math.round(clamp(value, 1, 12)),
+                                  count: Math.round(clamp(value, 1, 32)),
                                 })
                               }
                             />
-                            <NumberField
-                              label="Rayon"
-                              value={connectors.radius}
-                              min={0.5}
-                              max={20}
-                              step={0.5}
-                              onChange={(value) =>
-                                patchConnectors({ radius: clamp(value, 0.5, 20) })
-                              }
-                            />
-                            <NumberField
-                              label="Profondeur"
-                              value={connectors.depth}
-                              min={1}
-                              max={50}
-                              step={1}
-                              onChange={(value) =>
-                                patchConnectors({ depth: clamp(value, 1, 50) })
-                              }
-                            />
-                            <NumberField
-                              label="Jeu"
-                              value={connectors.clearance}
-                              min={0}
-                              max={1}
-                              step={0.05}
-                              onChange={(value) =>
-                                patchConnectors({ clearance: clamp(value, 0, 1) })
-                              }
-                            />
-                          </div>
-                        ) : null}
+                          ) : null}
+                          <NumberField
+                            label="Rayon des tenons"
+                            value={connectors.radius}
+                            min={0.5}
+                            max={50}
+                            step={0.5}
+                            onChange={(value) =>
+                              patchConnectors({ radius: clamp(value, 0.5, 50) })
+                            }
+                          />
+                          <NumberField
+                            label="Profondeur"
+                            value={connectors.depth}
+                            min={1}
+                            max={100}
+                            step={1}
+                            onChange={(value) =>
+                              patchConnectors({ depth: clamp(value, 1, 100) })
+                            }
+                          />
+                          <NumberField
+                            label="Tolérance (jeu)"
+                            value={connectors.clearance}
+                            min={0}
+                            max={2}
+                            step={0.05}
+                            onChange={(value) =>
+                              patchConnectors({ clearance: clamp(value, 0, 2) })
+                            }
+                          />
+                        </div>
+                        <div className="section-note" style={{ marginTop: 6 }}>
+                          Rayon et profondeur définissent la taille des tenons ;
+                          la tolérance est ajoutée au rayon des logements.
+                        </div>
                       </>
                     ) : null}
                     <button
@@ -1463,7 +1506,8 @@ export default function App() {
                     <div className="toggle-label">
                       <span>Connecteurs automatiques</span>
                       <small>
-                        Tenons de 6 mm de profondeur ajoutés à chaque coupe.
+                        Tenons ajoutés à chaque coupe, avec la taille et la
+                        tolérance ci-dessous.
                       </small>
                     </div>
                     <Switch
@@ -1472,6 +1516,62 @@ export default function App() {
                       label="Connecteurs automatiques"
                     />
                   </div>
+                  {autoConnectors ? (
+                    <>
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "1fr 1fr",
+                          gap: 8,
+                          marginTop: 8,
+                        }}
+                      >
+                        <NumberField
+                          label="Rayon des tenons"
+                          value={connectors.radius}
+                          min={0.5}
+                          max={50}
+                          step={0.5}
+                          onChange={(value) =>
+                            setConnectors((current) => ({
+                              ...current,
+                              radius: clamp(value, 0.5, 50),
+                            }))
+                          }
+                        />
+                        <NumberField
+                          label="Profondeur"
+                          value={connectors.depth}
+                          min={1}
+                          max={100}
+                          step={1}
+                          onChange={(value) =>
+                            setConnectors((current) => ({
+                              ...current,
+                              depth: clamp(value, 1, 100),
+                            }))
+                          }
+                        />
+                        <NumberField
+                          label="Tolérance (jeu)"
+                          value={connectors.clearance}
+                          min={0}
+                          max={2}
+                          step={0.05}
+                          onChange={(value) =>
+                            setConnectors((current) => ({
+                              ...current,
+                              clearance: clamp(value, 0, 2),
+                            }))
+                          }
+                        />
+                      </div>
+                      <div className="section-note" style={{ marginTop: 6 }}>
+                        Le placement reste automatique ; ces valeurs modifient la
+                        taille des tenons et le jeu des logements.
+                      </div>
+                    </>
+                  ) : null}
                   <div className="piece-estimate" style={{ marginTop: 10 }}>
                     <span>Pièces estimées</span>
                     <b>{autoEstimate}</b>
@@ -1792,6 +1892,8 @@ export default function App() {
                     </div>
                     <div className="section-note">
                       Vide l'intérieur de la pièce et ne conserve qu'une coque.
+                      Si l'épaisseur demandée est trop forte pour la géométrie,
+                      elle est réduite automatiquement et le résultat est signalé.
                       Le modèle doit être étanche pour un résultat propre.
                     </div>
                     <NumberField
@@ -1840,6 +1942,58 @@ export default function App() {
 
             {tab === "export" ? (
               <>
+                <section className="section">
+                  <div className="section-head">
+                    <span className="section-title">Filament estimé</span>
+                    <span className="badge">
+                      {fmt1(filament.massG)} g
+                    </span>
+                  </div>
+                  <div className="segmented">
+                    {MATERIALS.map((material) => (
+                      <button
+                        key={material.id}
+                        type="button"
+                        className={
+                          filamentMaterial === material.id ? "active accent" : ""
+                        }
+                        onClick={() => setFilamentMaterial(material.id)}
+                      >
+                        {material.label}
+                      </button>
+                    ))}
+                  </div>
+                  <NumberField
+                    label="Remplissage"
+                    value={infillPercent}
+                    min={0}
+                    max={100}
+                    step={5}
+                    unit="%"
+                    onChange={(value) =>
+                      setInfillPercent(clamp(value, 0, 100))
+                    }
+                  />
+                  <div className="piece-estimate" style={{ marginTop: 10 }}>
+                    <span>Matière</span>
+                    <b>{fmt1(filament.volumeCm3)} cm³</b>
+                  </div>
+                  <div className="piece-estimate" style={{ marginTop: 6 }}>
+                    <span>Masse</span>
+                    <b>{fmt1(filament.massG)} g</b>
+                  </div>
+                  <div className="piece-estimate" style={{ marginTop: 6 }}>
+                    <span>Longueur de filament</span>
+                    <b>{fmt1(filament.lengthM)} m</b>
+                  </div>
+                  <div className="section-note" style={{ marginTop: 8 }}>
+                    Estimation pour un filament de {FILAMENT_DIAMETER} mm, avec
+                    des parois pleines de {fmt1(PERIMETER_THICKNESS)} mm et le
+                    remplissage choisi. Le volume des pièces évidées est déjà
+                    compté comme matière.
+                  </div>
+                </section>
+
                 <section className="section">
                   <div className="section-head">
                     <span className="section-title">Format</span>

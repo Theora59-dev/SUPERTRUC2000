@@ -1,6 +1,7 @@
 //! Maillage triangulaire, réparation, statistiques et transformations.
 
 use glam::{DAffine3, DVec3};
+use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
@@ -121,6 +122,43 @@ impl Mesh {
             .get(index)
             .copied()
             .unwrap_or(DEFAULT_COLOR)
+    }
+
+    /// Couleur moyenne par sommet, pour l'affichage 3D. Vide si le maillage
+    /// n'a pas de couleurs.
+    pub fn vertex_colors_rgb(&self) -> Vec<[u8; 3]> {
+        if !self.has_colors() {
+            return Vec::new();
+        }
+        let mut sums = vec![[0u32; 3]; self.positions.len()];
+        let mut counts = vec![0u32; self.positions.len()];
+        for (tri_index, tri) in self.indices.chunks_exact(3).enumerate() {
+            let color = self.tri_colors[tri_index];
+            for &vertex in tri {
+                let index = vertex as usize;
+                if index >= sums.len() {
+                    continue;
+                }
+                sums[index][0] += color[0] as u32;
+                sums[index][1] += color[1] as u32;
+                sums[index][2] += color[2] as u32;
+                counts[index] += 1;
+            }
+        }
+        sums.iter()
+            .zip(counts.iter())
+            .map(|(sum, &count)| {
+                if count == 0 {
+                    DEFAULT_COLOR
+                } else {
+                    [
+                        (sum[0] / count) as u8,
+                        (sum[1] / count) as u8,
+                        (sum[2] / count) as u8,
+                    ]
+                }
+            })
+            .collect()
     }
 
     /// Définit les couleurs par triangle ; ignoré si la longueur ne correspond pas.
@@ -407,7 +445,13 @@ impl Mesh {
             return Err("Volume du modèle indétectable : impossible de calculer l'évidement.".into());
         }
 
-        let inner_positions = offset_surface_inward(&outer, thickness);
+        let (inner_positions, report) = offset_surface_inward(&outer, thickness);
+        if report.capped_fraction > 0.02 {
+            warnings.push(format!(
+                "Parois localement plus minces dans les détails fins ({:.0} % des sommets) : l'épaisseur demandée ne tient pas partout.",
+                report.capped_fraction * 100.0
+            ));
+        }
         let mut inner = Mesh {
             positions: inner_positions,
             indices: outer.indices.clone(),
@@ -418,7 +462,9 @@ impl Mesh {
         let shell_volume = outer_volume + inner_volume;
         if shell_volume <= 1e-6 || shell_volume >= outer_volume {
             return Err(format!(
-                "Épaisseur {thickness:.2} mm trop importante pour cette géométrie : les parois internes se croisent."
+                "Épaisseur {thickness:.2} mm trop importante pour cette géométrie : les parois internes se croisent (volume extérieur {:.1} cm³, volume intérieur {:.1} cm³).",
+                outer_volume / 1000.0,
+                inner_volume / 1000.0
             ));
         }
         if inner_volume > -1e-6 {
@@ -432,6 +478,71 @@ impl Mesh {
         result.append(&inner);
         Ok((result, warnings))
     }
+    /// Évide automatiquement : si l'épaisseur demandée fait se croiser les
+    /// parois internes, elle est réduite jusqu'à obtenir une coque valide.
+    ///
+    /// Renvoie `(maillage, épaisseur appliquée, avertissements)`.
+    pub fn hollow_shell_auto(
+        &self,
+        thickness: f64,
+    ) -> Result<(Mesh, f64, Vec<String>), String> {
+        if self.is_empty() {
+            return Err("La pièce est vide.".into());
+        }
+        if !(thickness.is_finite() && thickness > 0.0) {
+            return Err("L'épaisseur doit être supérieure à 0.".into());
+        }
+        let bounds = self.bounds();
+        let min_dim = bounds
+            .size
+            .iter()
+            .copied()
+            .fold(f64::INFINITY, f64::min)
+            .max(1e-9);
+        if !min_dim.is_finite() || min_dim <= 1e-6 {
+            return Err("Dimensions du modèle indétectables.".into());
+        }
+
+        let requested = thickness;
+        // Une coque ne peut pas dépasser ~45 % de la plus petite dimension.
+        let mut applied = requested.min(min_dim * 0.45);
+        let mut last_error = String::new();
+        for _ in 0..16 {
+            if !(applied > 0.0) {
+                break;
+            }
+            match self.hollow_shell(applied) {
+                Ok((mesh, mut warnings)) => {
+                    if applied + 1e-6 < requested {
+                        warnings.insert(
+                            0,
+                            format!(
+                                "Épaisseur réduite automatiquement de {requested:.2} mm à {applied:.2} mm : les parois internes se croiseraient à l'épaisseur demandée."
+                            ),
+                        );
+                    }
+                    return Ok((mesh, applied, warnings));
+                }
+                Err(error) => {
+                    last_error = error;
+                    applied *= 0.7;
+                    if applied < 0.05 {
+                        break;
+                    }
+                }
+            }
+        }
+
+        if last_error.is_empty() {
+            Err(format!(
+                "Impossible d'évider cette géométrie, même avec une paroi minimale."
+            ))
+        } else {
+            Err(format!(
+                "Impossible d'évider cette géométrie : {last_error}"
+            ))
+        }
+    }
 }
 
 /// Décale chaque sommet vers l'intérieur du volume de `thickness`.
@@ -439,7 +550,11 @@ impl Mesh {
 /// Pour un sommet, on résout au mieux le système `n_i · p' = n_i · p - t`
 /// pour toutes les faces adjacentes `i`. Un repli sur la normale moyenne est
 /// utilisé lorsque le système est dégénéré (sommet coplanaire).
-fn offset_surface_inward(mesh: &Mesh, thickness: f64) -> Vec<[f32; 3]> {
+///
+/// Le déplacement de chaque sommet est plafonné par l'épaisseur locale du
+/// matériau (mesurée par lancer de rayon vers la paroi opposée) : les détails
+/// fins gardent ainsi une paroi plus mince au lieu de traverser la matière.
+fn offset_surface_inward(mesh: &Mesh, thickness: f64) -> (Vec<[f32; 3]>, OffsetReport) {
     let count = mesh.positions.len();
     let mut matrix = vec![[0.0f64; 6]; count];
     let mut rhs = vec![[0.0f64; 3]; count];
@@ -475,15 +590,50 @@ fn offset_surface_inward(mesh: &Mesh, thickness: f64) -> Vec<[f32; 3]> {
         }
     }
 
+    let mut normals = Vec::with_capacity(count);
+    for s in &normal_sum {
+        let sum = DVec3::from_array(*s);
+        normals.push(if sum.length_squared() > 1e-24 {
+            sum.normalize()
+        } else {
+            DVec3::ZERO
+        });
+    }
+
+    // Plafond de déplacement : l'épaisseur locale du matériau, mesurée en
+    // lançant un rayon depuis chaque sommet vers l'intérieur. On garde une
+    // marge pour que les deux parois ne se croisent pas.
+    let bvh = TriBvh::build(mesh);
+    let limits: Vec<f64> = (0..count)
+        .into_par_iter()
+        .map(|i| {
+            let normal = normals[i];
+            if normal.length_squared() < 0.5 {
+                return thickness;
+            }
+            let p = mesh.pos(i as u32);
+            let eps = 1e-4;
+            match bvh.raycast(mesh, p - normal * eps, -normal) {
+                Some(distance) => thickness.min((distance + eps) * 0.45).max(1e-4),
+                None => thickness,
+            }
+        })
+        .collect();
+
+    // Lisse le plafond sur le voisinage pour éviter que deux sommets voisins
+    // aient des déplacements très différents (triangles retournés en lame).
+    let limits = smooth_limits(mesh, &limits, count, 8);
+
     let mut out = Vec::with_capacity(count);
     for i in 0..count {
         let p = mesh.pos(i as u32);
+        let allowed = limits[i];
         let [xx, yy, zz, xy, xz, yz] = matrix[i];
         let [bx, by, bz] = rhs[i];
         let det = xx * (yy * zz - yz * yz) - xy * (xy * zz - yz * xz)
             + xz * (xy * yz - yy * xz);
         let scale = (xx + yy + zz).max(1e-12);
-        if det.abs() > 1e-10 * scale * scale * scale {
+        if det.abs() > 1e-8 * scale * scale * scale {
             let det_x = bx * (yy * zz - yz * yz) - xy * (by * zz - yz * bz)
                 + xz * (by * yz - yy * bz);
             let det_y = xx * (by * zz - yz * bz) - bx * (xy * zz - yz * xz)
@@ -491,20 +641,239 @@ fn offset_surface_inward(mesh: &Mesh, thickness: f64) -> Vec<[f32; 3]> {
             let det_z = xx * (yy * bz - by * yz) - xy * (xy * bz - by * xz)
                 + bx * (xy * yz - yy * xz);
             let q = DVec3::new(det_x / det, det_y / det, det_z / det);
-            if q.is_finite() {
+            // Un système mal conditionné (sommet quasi dégénéré) peut donner
+            // un déplacement arbitrairement grand : on le rejette.
+            if q.is_finite() && (q - p).length() <= allowed * 2.5 {
                 out.push([q.x as f32, q.y as f32, q.z as f32]);
                 continue;
             }
         }
         let s = DVec3::from_array(normal_sum[i]);
         if s.length_squared() > 1e-24 {
-            let q = p - s.normalize() * thickness;
+            let q = p - s.normalize() * allowed;
             out.push([q.x as f32, q.y as f32, q.z as f32]);
         } else {
             out.push([p.x as f32, p.y as f32, p.z as f32]);
         }
     }
-    out
+    let capped = limits.iter().filter(|&&l| l < thickness * 0.95).count();
+    let report = OffsetReport {
+        capped_fraction: capped as f64 / count.max(1) as f64,
+    };
+    (out, report)
+}
+
+struct OffsetReport {
+    /// Proportion de sommets dont le déplacement a été réduit sous l'épaisseur
+    /// demandée pour ne pas traverser la matière.
+    capped_fraction: f64,
+}
+
+#[derive(Clone, Copy)]
+struct BvhNode {
+    min: DVec3,
+    max: DVec3,
+    /// Feuille : début dans `order` (`count` triangles). Nœud interne : index
+    /// des enfants gauche et droit.
+    left: u32,
+    right: u32,
+    count: u32,
+}
+
+/// Arbre de volumes englobants pour accélérer les lancers de rayons.
+struct TriBvh {
+    nodes: Vec<BvhNode>,
+    order: Vec<u32>,
+}
+
+impl TriBvh {
+    fn build(mesh: &Mesh) -> Self {
+        let triangle_count = mesh.triangle_count();
+        if triangle_count == 0 {
+            return Self {
+                nodes: Vec::new(),
+                order: Vec::new(),
+            };
+        }
+        let mut order: Vec<u32> = (0..triangle_count as u32).collect();
+        let mut nodes = Vec::with_capacity(triangle_count / 4 + 64);
+        let centroids: Vec<DVec3> = (0..triangle_count)
+            .map(|i| {
+                let tri = &mesh.indices[i * 3..i * 3 + 3];
+                (mesh.pos(tri[0]) + mesh.pos(tri[1]) + mesh.pos(tri[2])) / 3.0
+            })
+            .collect();
+        build_bvh_node(&mut nodes, mesh, &centroids, &mut order, 0);
+        Self { nodes, order }
+    }
+
+    fn raycast(&self, mesh: &Mesh, origin: DVec3, direction: DVec3) -> Option<f64> {
+        if self.nodes.is_empty() {
+            return None;
+        }
+        let mut best = f64::INFINITY;
+        let mut stack: Vec<u32> = Vec::with_capacity(64);
+        stack.push(0);
+        while let Some(index) = stack.pop() {
+            let node = self.nodes[index as usize];
+            if ray_aabb(&node, origin, direction, best).is_none() {
+                continue;
+            }
+            if node.count > 0 {
+                let start = node.left as usize;
+                let end = start + node.count as usize;
+                for &triangle in &self.order[start..end] {
+                    if let Some(distance) = ray_triangle(mesh, triangle, origin, direction) {
+                        if distance > 0.0 && distance < best {
+                            best = distance;
+                        }
+                    }
+                }
+            } else {
+                stack.push(node.left);
+                stack.push(node.right);
+            }
+        }
+        best.is_finite().then_some(best)
+    }
+}
+
+fn build_bvh_node(
+    nodes: &mut Vec<BvhNode>,
+    mesh: &Mesh,
+    centroids: &[DVec3],
+    order: &mut [u32],
+    base: usize,
+) -> u32 {
+    let index = nodes.len() as u32;
+    let mut min = DVec3::splat(f64::INFINITY);
+    let mut max = DVec3::splat(f64::NEG_INFINITY);
+    let mut centroid_min = DVec3::splat(f64::INFINITY);
+    let mut centroid_max = DVec3::splat(f64::NEG_INFINITY);
+    for &triangle in order.iter() {
+        let tri = &mesh.indices[triangle as usize * 3..triangle as usize * 3 + 3];
+        for &vertex in tri {
+            let p = mesh.pos(vertex);
+            min = min.min(p);
+            max = max.max(p);
+        }
+        let c = centroids[triangle as usize];
+        centroid_min = centroid_min.min(c);
+        centroid_max = centroid_max.max(c);
+    }
+    nodes.push(BvhNode {
+        min,
+        max,
+        left: base as u32,
+        right: 0,
+        count: order.len() as u32,
+    });
+    if order.len() <= 8 {
+        return index;
+    }
+
+    let extent = centroid_max - centroid_min;
+    let axis = if extent.x >= extent.y && extent.x >= extent.z {
+        0
+    } else if extent.y >= extent.z {
+        1
+    } else {
+        2
+    };
+    let middle = order.len() / 2;
+    order.select_nth_unstable_by(middle, |&a, &b| {
+        centroids[a as usize][axis]
+            .partial_cmp(&centroids[b as usize][axis])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let (left_order, right_order) = order.split_at_mut(middle);
+    let left = build_bvh_node(nodes, mesh, centroids, left_order, base);
+    let right = build_bvh_node(nodes, mesh, centroids, right_order, base + middle);
+    nodes[index as usize].left = left;
+    nodes[index as usize].right = right;
+    nodes[index as usize].count = 0;
+    index
+}
+
+fn ray_aabb(node: &BvhNode, origin: DVec3, direction: DVec3, max_t: f64) -> Option<f64> {
+    let mut t_min = 0.0f64;
+    let mut t_max = max_t;
+    for axis in 0..3 {
+        let o = origin[axis];
+        let d = direction[axis];
+        if d.abs() < 1e-12 {
+            if o < node.min[axis] || o > node.max[axis] {
+                return None;
+            }
+        } else {
+            let inv = 1.0 / d;
+            let mut t1 = (node.min[axis] - o) * inv;
+            let mut t2 = (node.max[axis] - o) * inv;
+            if t1 > t2 {
+                std::mem::swap(&mut t1, &mut t2);
+            }
+            t_min = t_min.max(t1);
+            t_max = t_max.min(t2);
+            if t_max < t_min {
+                return None;
+            }
+        }
+    }
+    Some(t_min)
+}
+
+fn ray_triangle(mesh: &Mesh, triangle: u32, origin: DVec3, direction: DVec3) -> Option<f64> {
+    let tri = &mesh.indices[triangle as usize * 3..triangle as usize * 3 + 3];
+    let a = mesh.pos(tri[0]);
+    let b = mesh.pos(tri[1]);
+    let c = mesh.pos(tri[2]);
+    let edge1 = b - a;
+    let edge2 = c - a;
+    let pvec = direction.cross(edge2);
+    let det = edge1.dot(pvec);
+    if det.abs() < 1e-12 {
+        return None;
+    }
+    let inv_det = 1.0 / det;
+    let tvec = origin - a;
+    let u = tvec.dot(pvec) * inv_det;
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+    let qvec = tvec.cross(edge1);
+    let v = direction.dot(qvec) * inv_det;
+    if v < 0.0 || u + v > 1.0 {
+        return None;
+    }
+    let distance = edge2.dot(qvec) * inv_det;
+    (distance > 0.0).then_some(distance)
+}
+
+/// Diffuse le plafond de déplacement sur le voisinage sans jamais dépasser la
+/// limite locale de chaque sommet.
+fn smooth_limits(mesh: &Mesh, limits: &[f64], count: usize, iterations: usize) -> Vec<f64> {
+    let mut current = limits.to_vec();
+    let mut sums = vec![0.0f64; count];
+    let mut counts = vec![0u32; count];
+    for _ in 0..iterations {
+        sums.fill(0.0);
+        counts.fill(0);
+        for tri in mesh.iter_triangles() {
+            let average =
+                (current[tri[0] as usize] + current[tri[1] as usize] + current[tri[2] as usize])
+                    / 3.0;
+            for &vertex in &tri {
+                sums[vertex as usize] += average;
+                counts[vertex as usize] += 1;
+            }
+        }
+        for i in 0..count {
+            if counts[i] > 0 {
+                current[i] = (sums[i] / counts[i] as f64).min(limits[i]);
+            }
+        }
+    }
+    current
 }
 
 #[cfg(test)]
@@ -576,6 +945,16 @@ mod tests {
     fn hollow_rejects_excessive_thickness() {
         let m = cube();
         assert!(m.hollow_shell(6.0).is_err());
+    }
+
+    #[test]
+    fn hollow_auto_reduces_thickness() {
+        let m = cube();
+        let (shell, applied, warnings) = m.hollow_shell_auto(6.0).unwrap();
+        assert!(applied > 0.0 && applied < 6.0, "épaisseur {applied}");
+        assert!(!warnings.is_empty());
+        assert_eq!(shell.open_edge_count(), 0);
+        assert!(shell.triangle_count() > 0);
     }
 
     #[test]

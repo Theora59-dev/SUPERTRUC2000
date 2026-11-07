@@ -19,18 +19,22 @@ partie de l'application et n'est pas modifié.
 - **Découpe par plan** sur X, Y ou Z, avec position réglable et aperçu du plan dans la vue 3D.
 - **Découpe automatique** : le modèle est découpé par plans répartis uniformément pour que chaque
   pièce tienne dans le volume d'impression, en tenant compte de la marge.
-- **Connecteurs** cylindriques ajoutés automatiquement (tenons d'un côté, logements de l'autre),
-  sans opération booléenne lourde.
+- **Connecteurs** cylindriques (tenons d'un côté, logements de l'autre), sans opération booléenne
+  lourde. Le rayon, la profondeur et la tolérance (jeu) sont réglables ; en mode automatique, seul
+  le nombre et le placement sont calculés, la taille demandée est conservée.
 - **Réparation** du maillage : soudure des sommets, suppression des triangles dégénérés, recalcul
   des normales.
 - **Évidement** : vide l'intérieur d'un modèle plein en ne conservant qu'une coque d'épaisseur
   réglable. La surface intérieure est calculée par décalage des faces vers l'intérieur, puis
-  retournée et fusionnée avec la surface extérieure. Le volume avant/après est indiqué, et un
-  avertissement signale les maillages non étanches ou les épaisseurs trop grandes.
+  retournée et fusionnée avec la surface extérieure. Le déplacement de chaque sommet est plafonné
+  par l'épaisseur locale du matériau (mesurée par lancer de rayon), puis lissé : les détails fins
+  gardent une paroi plus mince au lieu de faire échouer l'opération. Le volume avant/après est
+  indiqué et un avertissement signale les zones où l'épaisseur demandée n'a pas pu être tenue.
 - **Couleurs 3MF** : les couleurs par triangle (`basematerials` et `m:colorgroup`) sont lues à
-  l'import, propagées lors des découpes, réparations, transformations et évidements, puis
-  réécrites à l'export 3MF. Les bouchons et connecteurs reprennent la couleur dominante de la
-  pièce.
+  l'import, ainsi que les peintures multicolores Bambu Studio / Orca Slicer (`paint_color`,
+  palette `filament_colour` et extruder par défaut des métadonnées). Elles sont propagées lors des
+  découpes, réparations, transformations et évidements, affichées dans la vue 3D et réécrites à
+  l'export 3MF. Les bouchons et connecteurs reprennent la couleur dominante de la pièce.
 - **Transformations** : translation, rotation, mise à l'échelle, hauteur cible, ajustement au
   plateau, pose sur le plateau, centrage, miroir.
 - **Organisation** : duplication, suppression, disposition automatique sur le plateau,
@@ -43,7 +47,11 @@ partie de l'application et n'est pas modifié.
   - OBJ groupé (toutes les pièces dans un seul fichier) ;
   - 3MF groupé (toutes les pièces dans un seul fichier), avec conservation des couleurs.
   - Les exports OBJ et 3MF répartissent automatiquement les pièces sur le plateau.
-- Aperçu 3D performant : la géométrie reste dans le backend Rust et transite par IPC binaire.
+- **Estimation du filament** : volume de matière, masse et longueur de filament nécessaires en
+  fonction du matériau (PLA, PETG, ABS, ASA, TPU), du taux de remplissage et des parois pleines.
+  La masse estimée est aussi rappelée dans l'en-tête.
+- Aperçu 3D performant, couleurs par sommet incluses : la géométrie reste dans le backend Rust et
+  transite par IPC binaire.
 - Interface entièrement en français, thème sombre « atelier industriel ».
 
 ---
@@ -105,17 +113,19 @@ npm run tauri build -- --no-bundle
 1. **Importer** un modèle avec le bouton d'import ou en le glissant dans la fenêtre.
 2. **Découpe** (onglet par défaut) :
    - choisissez l'axe et la position du plan ;
-   - activez éventuellement les connecteurs et réglez leur nombre, rayon, profondeur et jeu ;
+   - activez éventuellement les connecteurs et réglez leur rayon, profondeur et tolérance ;
    - cliquez sur « Découper ». Les deux pièces apparaissent dans la liste.
 3. **Auto** : ajustez le plateau (X, Y, Z, marge), puis lancez la découpe automatique sur toutes
-   les pièces ou sur la sélection. L'application estime le nombre de pièces avant de couper.
+   les pièces ou sur la sélection. L'application estime le nombre de pièces avant de couper. Les
+   champs de taille et de tolérance des tenons restent disponibles en mode automatique.
 4. **Édition** : sélectionnez une pièce dans la liste ou dans la vue 3D, puis appliquez une
    transformation, réparez-la, évidez-la, dupliquez-la ou supprimez-la.
    - **Évidement** : réglez l'épaisseur des parois (en mm) puis cliquez sur « Évider la pièce ».
-     Le modèle doit être étanche pour obtenir une coque propre ; les parois internes se croisent
-     si l'épaisseur est trop grande, et l'opération est alors refusée avec un message.
+     L'application réduit automatiquement l'épaisseur là où la géométrie ne la permet pas (détails
+     fins, parois minces) et signale les zones concernées au lieu de refuser l'opération.
 5. **Export** : choisissez le format, la portée (tout ou sélection) et le fichier/dossier de
-   destination.
+   destination. L'onglet Export affiche aussi l'estimation de filament : choix du matériau, taux
+   de remplissage, volume de matière, masse et longueur nécessaires.
 
 La **vue éclatée** s'active avec le bouton « Éclater » de la surcouche 3D ou la touche `E` ;
 la touche `!` (ou un second appui) rassemble les pièces. L'écartement est purement visuel :
@@ -171,20 +181,26 @@ SUPERTRUC2000/
 
 - **Toute la géométrie est traitée en Rust.** Le frontend ne fait qu'afficher le résultat.
 - **Aperçu binaire** : `preview_mesh` renvoie un `ArrayBuffer` composé de
-  `u32 vertex_count`, `u32 index_count`, puis des positions `f32 × 3` et des indices `u32`
-  en little-endian. Cela évite le coût du JSON pour les gros maillages.
+  `u32 vertex_count`, `u32 index_count`, puis des positions `f32 × 3`, des indices `u32` et,
+  si le modèle est coloré, une couleur RGB par sommet (3 octets, moyenne des couleurs des
+  triangles adjacents). Cela évite le coût du JSON pour les gros maillages.
 - **Cache d'aperçu** : chaque pièce possède une `revision` ; le frontend ne recharge la géométrie
   que lorsque celle-ci change.
 - **Découpe sans CSG** : les bouchons de coupe sont triangulés avec `earcutr`. Les connecteurs
   sont des cylindres : des tenons sur la pièce négative et des logements percés depuis le plan sur
-  la pièce positive, ce qui reste rapide et robuste.
+  la pièce positive, ce qui reste rapide et robuste. La tolérance est ajoutée au rayon des
+  logements.
 - **Couleurs par triangle** : `Mesh.tri_colors` stocke une couleur RGB par triangle (vide si le
   modèle n'en a pas). Toutes les opérations qui reconstruisent le maillage propagent ces couleurs ;
   l'export 3MF écrit un groupe `basematerials` par pièce avec `pid`/`p1` sur chaque triangle.
 - **Évidement** : chaque sommet est décalé vers l'intérieur en résolvant au mieux les plans
-  tangents de ses faces adjacentes (moindres carrés), avec repli sur la normale moyenne. La coque
-  intérieure est inversée puis fusionnée à l'extérieur pour former une paroi étanche.
-- **Calcul parallèle** avec `rayon` pour les opérations lourdes.
+  tangents de ses faces adjacentes (moindres carrés), avec repli sur la normale moyenne. Un arbre
+  de volumes englobants (BVH) mesure l'épaisseur locale par lancer de rayon ; le déplacement est
+  plafonné à une fraction de cette épaisseur et lissé sur le voisinage. La coque intérieure est
+  inversée puis fusionnée à l'extérieur pour former une paroi étanche.
+- **Estimation filament** : réalisée côté frontend à partir du volume et de la surface de chaque
+  pièce, avec des parois pleines de 1,2 mm, le remplissage choisi, la densité du matériau et un
+  filament de 1,75 mm.
 
 ---
 
@@ -217,6 +233,7 @@ npm run build
   ralentir l'aperçu.
 - Il n'existe pas encore de sauvegarde de projet : l'atelier est perdu à la fermeture.
 - L'historique est limité à **16 niveaux**.
-- L'évidement conserve une épaisseur constante et ne gère pas encore les ouvertures de vidange ;
-  il est déconseillé sur les maillages ouverts ou les parois plus épaisses que la moitié de la
-  plus petite dimension.
+- L'évidement s'adapte localement à l'épaisseur disponible mais ne gère pas encore les ouvertures
+  de vidange ; les maillages ouverts restent déconseillés.
+- L'estimation filament est indicative : elle ne simule pas les supports, les purges de changement
+  de couleur ni les réglages exacts du trancheur.

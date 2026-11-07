@@ -100,6 +100,8 @@ struct Tri {
     pid: Option<usize>,
     /// Indice de couleur du triangle (`p1`, éventuellement `p2`/`p3`).
     p1: Option<usize>,
+    /// Indice dans la table des codes de peinture Bambu/Orca (`paint_color`).
+    paint: Option<u32>,
 }
 
 pub struct Loaded3mf {
@@ -113,6 +115,7 @@ pub fn load_3mf(bytes: &[u8]) -> Result<Loaded3mf, String> {
         ZipArchive::new(cursor).map_err(|e| format!("Archive 3MF invalide : {e}"))?;
     let names: Vec<String> = archive.file_names().map(str::to_string).collect();
     let root_name = find_root_part(&mut archive, &names)?;
+    let bambu = read_bambu_colors(&mut archive, &names);
 
     let mut warnings = Vec::new();
     let mut parts: HashMap<String, ParsedModel> = HashMap::new();
@@ -150,12 +153,19 @@ pub fn load_3mf(bytes: &[u8]) -> Result<Loaded3mf, String> {
 
     for (id, transform) in &roots {
         let before = triangles.len();
+        let default_color = bambu
+            .default_extruders
+            .get(id)
+            .and_then(|index| bambu.palette.get(*index))
+            .copied();
         collect_leaf(
             &root_name,
             *id,
             &parts,
             *transform,
             0,
+            &bambu,
+            default_color,
             &mut positions,
             &mut triangles,
             &mut tri_colors,
@@ -311,8 +321,18 @@ struct ParsedModel {
     items: Vec<(usize, Mat4)>,
     /// Groupes de couleurs (`basematerials` et `m:colorgroup`), par identifiant.
     palettes: HashMap<usize, Vec<[u8; 3]>>,
+    /// Codes `paint_color` dédupliqués (Bambu Studio / Orca Slicer).
+    paint_codes: Vec<String>,
     unit: f64,
     warnings: Vec<String>,
+}
+
+/// Palette et extruder par défaut lus dans les métadonnées Bambu Studio.
+#[derive(Default)]
+struct BambuColors {
+    palette: Vec<[u8; 3]>,
+    /// Extruder par défaut (index 0) par identifiant d'objet.
+    default_extruders: HashMap<usize, usize>,
 }
 
 fn parse_model(xml: &str) -> Result<ParsedModel, String> {
@@ -321,6 +341,8 @@ fn parse_model(xml: &str) -> Result<ParsedModel, String> {
     let mut objects: HashMap<usize, ObjectDef> = HashMap::new();
     let mut items: Vec<(usize, Mat4)> = Vec::new();
     let mut palettes: HashMap<usize, Vec<[u8; 3]>> = HashMap::new();
+    let mut paint_codes: Vec<String> = Vec::new();
+    let mut paint_lookup: HashMap<String, u32> = HashMap::new();
     let mut current_group: Option<usize> = None;
     let mut unit = 1.0f64;
     let mut warnings = Vec::new();
@@ -404,6 +426,9 @@ fn parse_model(xml: &str) -> Result<ParsedModel, String> {
                                 v: [v1, v2, v3],
                                 pid: attr(&e, b"pid").and_then(|s| s.parse::<usize>().ok()),
                                 p1,
+                                paint: attr(&e, b"paint_color").map(|code| {
+                                    intern_paint(&mut paint_codes, &mut paint_lookup, &code)
+                                }),
                             });
                         }
                     }
@@ -458,9 +483,26 @@ fn parse_model(xml: &str) -> Result<ParsedModel, String> {
         objects,
         items,
         palettes,
+        paint_codes,
         unit,
         warnings,
     })
+}
+
+/// Ajoute un code `paint_color` à la table dédupliquée et renvoie son indice.
+fn intern_paint(
+    codes: &mut Vec<String>,
+    lookup: &mut HashMap<String, u32>,
+    value: &str,
+) -> u32 {
+    let key = value.trim().to_ascii_uppercase();
+    if let Some(index) = lookup.get(&key) {
+        return *index;
+    }
+    let index = codes.len() as u32;
+    codes.push(key.clone());
+    lookup.insert(key, index);
+    index
 }
 
 fn collect_leaf(
@@ -469,6 +511,8 @@ fn collect_leaf(
     parts: &HashMap<String, ParsedModel>,
     transform: Mat4,
     depth: usize,
+    bambu: &BambuColors,
+    default_color: Option<[u8; 3]>,
     positions: &mut Vec<[f64; 3]>,
     triangles: &mut Vec<[u32; 3]>,
     tri_colors: &mut Vec<Option<[u8; 3]>>,
@@ -503,6 +547,8 @@ fn collect_leaf(
             parts,
             component.transform.then(&transform),
             depth + 1,
+            bambu,
+            default_color,
             positions,
             triangles,
             tri_colors,
@@ -522,16 +568,153 @@ fn collect_leaf(
         for t in &obj.triangles {
             if t.v.iter().all(|&i| (i as usize) < obj.vertices.len()) {
                 triangles.push([t.v[0] + base, t.v[1] + base, t.v[2] + base]);
-                let color = t
+                let standard = t
                     .pid
                     .or(obj.pid)
                     .and_then(|gid| part.palettes.get(&gid))
                     .and_then(|palette| palette.get(t.p1.unwrap_or(obj.pindex)))
                     .copied();
-                tri_colors.push(color);
+                let painted = t
+                    .paint
+                    .and_then(|index| part.paint_codes.get(index as usize))
+                    .and_then(|code| decode_paint_state(code))
+                    .and_then(|state| {
+                        if state == 0 {
+                            default_color
+                        } else {
+                            bambu.palette.get(state - 1).copied()
+                        }
+                    });
+                tri_colors.push(painted.or(standard).or(default_color));
             }
         }
     }
+}
+
+/// Décode l'état de couleur (extruder 1-based, 0 = défaut) d'un code
+/// `paint_color` Bambu Studio / Orca Slicer.
+///
+/// Le code est un flux de quartets lu de droite à gauche. Pour un triangle
+/// subdivisé, on retient la première feuille (approximation du rendu).
+fn decode_paint_state(code: &str) -> Option<usize> {
+    let mut nibbles: Vec<u8> = Vec::with_capacity(code.len());
+    for ch in code.trim().chars().rev() {
+        nibbles.push(ch.to_digit(16)? as u8);
+    }
+    if nibbles.is_empty() {
+        return None;
+    }
+    let mut pos = 0usize;
+    decode_paint_node(&nibbles, &mut pos)
+}
+
+fn decode_paint_node(nibbles: &[u8], pos: &mut usize) -> Option<usize> {
+    let token = *nibbles.get(*pos)?;
+    *pos += 1;
+    let split_sides = (token & 0b11) as usize;
+    if split_sides == 0 {
+        let state = (token >> 2) as usize;
+        if state < 3 {
+            return Some(state);
+        }
+        let z = *nibbles.get(*pos)? as usize;
+        *pos += 1;
+        if z < 14 {
+            return Some(3 + z);
+        }
+        if z == 14 {
+            let low = *nibbles.get(*pos)? as usize;
+            *pos += 1;
+            let high = *nibbles.get(*pos)? as usize;
+            *pos += 1;
+            return Some(17 + (high << 4) + low);
+        }
+        return None;
+    }
+    // Nœud subdivisé : les enfants suivent. On garde la première couleur.
+    let mut first = None;
+    for _ in 0..(split_sides + 1) {
+        let state = decode_paint_node(nibbles, pos)?;
+        if first.is_none() {
+            first = Some(state);
+        }
+    }
+    first
+}
+
+/// Lit la palette `filament_colour` et les extruders par défaut des
+/// métadonnées Bambu Studio (`Metadata/project_settings.config` et
+/// `Metadata/model_settings.config`).
+fn read_bambu_colors(
+    archive: &mut ZipArchive<Cursor<&[u8]>>,
+    names: &[String],
+) -> BambuColors {
+    let mut result = BambuColors::default();
+
+    if let Some(name) = resolve_archive_name(names, "Metadata/project_settings.config") {
+        if let Ok(text) = read_part(archive, &name) {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                if let Some(list) = json.get("filament_colour").and_then(|v| v.as_array()) {
+                    result.palette = list
+                        .iter()
+                        .filter_map(|v| v.as_str())
+                        .filter_map(parse_color)
+                        .collect();
+                }
+            }
+        }
+    }
+
+    if let Some(name) = resolve_archive_name(names, "Metadata/model_settings.config") {
+        if let Ok(text) = read_part(archive, &name) {
+            result.default_extruders = parse_default_extruders(&text);
+        }
+    }
+
+    result
+}
+
+/// Extrait l'extruder par défaut (0-based) de chaque objet de
+/// `model_settings.config`.
+fn parse_default_extruders(xml: &str) -> HashMap<usize, usize> {
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+    let mut map = HashMap::new();
+    let mut current_object: Option<usize> = None;
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                match e.local_name().as_ref() {
+                    b"object" => {
+                        current_object = attr(&e, b"id").and_then(|s| s.parse::<usize>().ok());
+                    }
+                    b"metadata" => {
+                        let key = attr(&e, b"key").unwrap_or_default();
+                        if key.eq_ignore_ascii_case("extruder") {
+                            if let Some(object) = current_object {
+                                if let Some(index) = attr(&e, b"value")
+                                    .and_then(|s| s.trim().parse::<usize>().ok())
+                                    .and_then(|n| n.checked_sub(1))
+                                {
+                                    map.entry(object).or_insert(index);
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::End(e)) => {
+                if e.local_name().as_ref() == b"object" {
+                    current_object = None;
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+    map
 }
 
 /// Analyse une couleur 3MF (`#RRGGBB` ou `#RRGGBBAA`).
@@ -823,5 +1006,80 @@ mod tests {
         assert!((bounds.min[0] - 6.0).abs() < 1e-4, "{:?}", bounds.min);
         assert!((bounds.min[1] - 2.0).abs() < 1e-4, "{:?}", bounds.min);
         assert!((bounds.min[2] - 3.0).abs() < 1e-4, "{:?}", bounds.min);
+    }
+
+    #[test]
+    fn reads_bambu_paint_colors() {
+        let root = r##"<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06" requiredextensions="p">
+  <resources>
+    <object id="2" type="model">
+      <components>
+        <component p:path="/3D/Objects/object_1.model" objectid="1"/>
+      </components>
+    </object>
+  </resources>
+  <build>
+    <item objectid="2"/>
+  </build>
+</model>"##;
+        let child = r##"<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
+  <resources>
+    <object id="1" type="model">
+      <mesh>
+        <vertices>
+          <vertex x="0" y="0" z="0"/><vertex x="10" y="0" z="0"/><vertex x="0" y="10" z="0"/>
+          <vertex x="20" y="0" z="0"/><vertex x="30" y="0" z="0"/><vertex x="20" y="10" z="0"/>
+          <vertex x="40" y="0" z="0"/><vertex x="50" y="0" z="0"/><vertex x="40" y="10" z="0"/>
+          <vertex x="60" y="0" z="0"/><vertex x="70" y="0" z="0"/><vertex x="60" y="10" z="0"/>
+        </vertices>
+        <triangles>
+          <triangle v1="0" v2="1" v3="2" paint_color="8"/>
+          <triangle v1="3" v2="4" v3="5" paint_color="0C"/>
+          <triangle v1="6" v2="7" v3="8" paint_color="1C"/>
+          <triangle v1="9" v2="10" v3="11"/>
+        </triangles>
+      </mesh>
+    </object>
+  </resources>
+  <build/>
+</model>"##;
+        let project = r##"{
+  "filament_colour": ["#FF0000", "#FFFFFF", "#000000", "#FFFF00"]
+}"##;
+        let settings = r#"<?xml version="1.0" encoding="UTF-8"?>
+<config>
+  <object id="2">
+    <metadata key="name" value="Delibird.stl"/>
+    <metadata key="extruder" value="1"/>
+    <part id="1" subtype="normal_part">
+      <metadata key="name" value="Delibird.stl"/>
+    </part>
+  </object>
+</config>"#;
+        let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        zip.start_file("3D/3dmodel.model", options).unwrap();
+        zip.write_all(root.as_bytes()).unwrap();
+        zip.start_file("3D/Objects/object_1.model", options)
+            .unwrap();
+        zip.write_all(child.as_bytes()).unwrap();
+        zip.start_file("Metadata/project_settings.config", options)
+            .unwrap();
+        zip.write_all(project.as_bytes()).unwrap();
+        zip.start_file("Metadata/model_settings.config", options)
+            .unwrap();
+        zip.write_all(settings.as_bytes()).unwrap();
+        let bytes = zip.finish().unwrap().into_inner();
+
+        let loaded = load_3mf(&bytes).unwrap();
+        assert_eq!(loaded.mesh.triangle_count(), 4);
+        assert!(loaded.mesh.has_colors());
+        let colors = &loaded.mesh.tri_colors;
+        assert!(colors.contains(&[0xFF, 0xFF, 0xFF]), "{colors:?}");
+        assert!(colors.contains(&[0x00, 0x00, 0x00]), "{colors:?}");
+        assert!(colors.contains(&[0xFF, 0xFF, 0x00]), "{colors:?}");
+        assert!(colors.contains(&[0xFF, 0x00, 0x00]), "{colors:?}");
     }
 }

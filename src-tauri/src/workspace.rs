@@ -355,7 +355,7 @@ impl Workspace {
     pub fn auto_split(
         &mut self,
         ids: Option<Vec<u64>>,
-        connectors: bool,
+        connectors: ConnectorOptions,
     ) -> Result<ActionResult, String> {
         if self.parts.is_empty() {
             return Err("Aucune pièce à découper.".into());
@@ -409,12 +409,10 @@ impl Workspace {
                 .to_string();
             let opts = CutOptions {
                 connectors: ConnectorOptions {
-                    enabled: connectors,
-                    auto: true,
-                    count: 4,
-                    radius: 3.0,
-                    depth: 6.0,
-                    clearance: 0.2,
+                    depth: connectors.depth.clamp(1.0, 100.0),
+                    radius: connectors.radius.clamp(0.5, 50.0),
+                    clearance: connectors.clearance.clamp(0.0, 2.0),
+                    ..connectors
                 },
             };
             let mut pieces: Vec<Mesh> = Vec::new();
@@ -565,11 +563,12 @@ impl Workspace {
     }
 
     /// Évide une pièce : ne conserve qu'une coque d'épaisseur `thickness`.
+    /// L'épaisseur est réduite automatiquement si la géométrie l'exige.
     pub fn hollow(&mut self, id: u64, thickness: f64) -> Result<ActionResult, String> {
         let idx = self.find(id)?;
         let part = self.parts[idx].clone();
         let before = part.stats.volume;
-        let (mesh, warnings) = part.mesh.hollow_shell(thickness)?;
+        let (mesh, applied, warnings) = part.mesh.hollow_shell_auto(thickness)?;
         if mesh.is_empty() {
             return Err("L'évidement a supprimé toute la géométrie.".into());
         }
@@ -585,9 +584,16 @@ impl Workspace {
             .next()
             .unwrap_or("Pièce")
             .to_string();
+        let thickness_message = if applied + 1e-6 < thickness {
+            format!(
+                "parois réduites à {applied:.2} mm (épaisseur demandée : {thickness:.2} mm)"
+            )
+        } else {
+            format!("parois de {applied:.2} mm")
+        };
         Ok(self.action(
             format!(
-                "{stem} évidé : parois de {thickness:.2} mm, volume {:.1} cm³ → {:.1} cm³.",
+                "{stem} évidé : {thickness_message}, volume {:.1} cm³ → {:.1} cm³.",
                 before / 1000.0,
                 stats.volume / 1000.0
             ),
@@ -899,7 +905,7 @@ mod tests {
             margin: 2.0,
         };
         ws.import_mesh("Cube".into(), cube(100.0)).unwrap();
-        let res = ws.auto_split(None, true).unwrap();
+        let res = ws.auto_split(None, ConnectorOptions::default()).unwrap();
         assert!(res.workspace.parts.len() >= 8);
         for p in &res.workspace.parts {
             assert!(p.size[0] <= 50.0 + 1e-6);
@@ -922,6 +928,20 @@ mod tests {
         );
         assert!(res.warnings.is_empty());
         assert_eq!(ws.parts[0].mesh.open_edge_count(), 0);
+    }
+
+    #[test]
+    fn hollow_part_reduces_thickness_instead_of_failing() {
+        let mut ws = Workspace::default();
+        let id = ws.import_mesh("Cube".into(), cube(20.0)).unwrap();
+        let res = ws.hollow(id, 15.0).unwrap();
+        assert!(
+            !res.warnings.is_empty(),
+            "la réduction d'épaisseur doit être signalée"
+        );
+        assert!(res.message.contains("réduites"));
+        assert_eq!(ws.parts[0].mesh.open_edge_count(), 0);
+        assert!(ws.parts[0].stats.volume > 0.0);
     }
 
     #[test]
