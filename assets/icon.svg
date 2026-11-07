@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#161a20"/>
+      <stop offset="1" stop-color="#08090b"/>
+    </linearGradient>
+    <linearGradient id="cut" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffb224" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#ffb224"/>
+      <stop offset="1" stop-color="#ffb224" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="face" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3ecfb2"/>
+      <stop offset="1" stop-color="#1d7d6c"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="220" fill="url(#bg)"/>
+  <path d="M512 190 L806 360 L806 690 L512 860 L218 690 L218 360 Z" fill="none" stroke="#3ecfb2" stroke-width="26" stroke-linejoin="round"/>
+  <path d="M512 190 L806 360 L512 530 L218 360 Z" fill="#1b2a2c" opacity="0.9"/>
+  <path d="M512 530 L806 360 L806 690 L512 860 Z" fill="url(#face)" opacity="0.35"/>
+  <path d="M512 530 L218 360 L218 690 L512 860 Z" fill="#0e1518" opacity="0.7"/>
+  <path d="M512 190 L512 530 M218 360 L512 530 L806 360 M512 530 L512 860" fill="none" stroke="#3ecfb2" stroke-width="16" opacity="0.8"/>
+  <path d="M180 620 L844 480" stroke="url(#cut)" stroke-width="34" stroke-linecap="round"/>
+  <path d="M180 620 L844 480" stroke="#ffe4a8" stroke-width="8" stroke-linecap="round" opacity="0.9"/>
+  <circle cx="512" cy="550" r="20" fill="#ffb224"/>
+</svg>

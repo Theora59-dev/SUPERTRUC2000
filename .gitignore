@@ -1,0 +1,14 @@
+# Dépendances et artefacts de build
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# Binaires et fichiers volumineux locaux
+LuBan
+Delibird_*.3mf
+
+# Environnement
+.env
+.env.local
+*.log
