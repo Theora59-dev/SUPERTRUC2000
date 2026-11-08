@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "SUPERTRUC 2000",
+  "productName": "Polyforma",
   "version": "0.1.0",
-  "identifier": "com.supertruc2000.atelier",
+  "identifier": "com.polyforma.atelier",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "SUPERTRUC 2000 — Atelier de découpe 3D",
+        "title": "Polyforma — Atelier de découpe 3D",
         "width": 1440,
         "height": 920,
         "minWidth": 1080,
@@ -39,6 +39,6 @@
       "icons/icon.ico"
     ],
     "shortDescription": "Découpez et préparez vos grands modèles 3D",
-    "longDescription": "SUPERTRUC 2000 découpe les grands modèles 3D en pièces imprimables, ajoute des connecteurs, répare les maillages et exporte en STL, OBJ ou 3MF."
+    "longDescription": "Polyforma découpe les grands modèles 3D en pièces imprimables, ajoute des connecteurs, répare les maillages et exporte en STL, OBJ ou 3MF."
   }
 }

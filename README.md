@@ -1,4 +1,8 @@
-# SUPERTRUC 2000
+<p align="center">
+  <img src="assets/logo.svg" alt="Polyforma — atelier de découpe 3D" width="720" />
+</p>
+
+# Polyforma
 
 Atelier de bureau pour **découper et préparer de grands modèles 3D destinés à l'impression**.
 Application locale en **Rust (Tauri v2)** avec une interface React/three.js, inspirée de
@@ -79,7 +83,8 @@ Sur les autres distributions, consultez la
 ## Installation
 
 ```bash
-cd SUPERTRUC2000
+git clone git@github.com:Theora59-dev/SUPERTRUC2000.git Polyforma
+cd Polyforma
 npm install
 ```
 
@@ -153,9 +158,13 @@ servent au calcul de la découpe automatique et à la disposition des exports gr
 ## Architecture
 
 ```
-SUPERTRUC2000/
+Polyforma/
 ├── LuBan                  # binaire de référence d'origine (non utilisé)
-├── assets/icon.svg        # source des icônes
+├── assets/
+│   ├── icon.svg           # icône de l'application (source des icônes Tauri)
+│   ├── mark.svg           # symbole Polyforma seul
+│   └── logo.svg           # bannière de marque (symbole + nom)
+├── public/favicon.svg     # favicon de l'interface
 ├── index.html
 ├── src/                   # frontend React + TypeScript + three.js
 │   ├── App.tsx            # interface, état, commandes, export

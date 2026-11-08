@@ -228,7 +228,7 @@ export function IconRefresh(props: IconProps) {
   );
 }
 
-export function BrandMark({ size = 34 }: { size?: number }) {
+export function BrandMark({ size = 38 }: { size?: number }) {
   return (
     <svg
       className="brand-mark"
@@ -238,42 +238,96 @@ export function BrandMark({ size = 34 }: { size?: number }) {
       aria-hidden="true"
     >
       <defs>
-        <linearGradient id="stk-face" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#3ecfb2" />
-          <stop offset="1" stopColor="#1d7d6c" />
+        <radialGradient id="bmBg" cx="0.5" cy="0.3" r="0.9">
+          <stop offset="0" stopColor="#1b2530" />
+          <stop offset="0.55" stopColor="#0d1218" />
+          <stop offset="1" stopColor="#06080b" />
+        </radialGradient>
+        <radialGradient id="bmHalo" cx="0.5" cy="0.5" r="0.5">
+          <stop offset="0" stopColor="#3ecfb2" stopOpacity="0.22" />
+          <stop offset="0.6" stopColor="#3ecfb2" stopOpacity="0.05" />
+          <stop offset="1" stopColor="#3ecfb2" stopOpacity="0" />
+        </radialGradient>
+        <linearGradient id="bmRim" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#ffffff" stopOpacity="0.16" />
+          <stop offset="0.5" stopColor="#ffffff" stopOpacity="0.04" />
+          <stop offset="1" stopColor="#ffffff" stopOpacity="0.10" />
         </linearGradient>
-        <linearGradient id="stk-cut" x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0" stopColor="#ffb224" stopOpacity="0" />
-          <stop offset="0.5" stopColor="#ffb224" />
-          <stop offset="1" stopColor="#ffb224" stopOpacity="0" />
+        <linearGradient id="bmTop" x1="0.1" y1="0" x2="0.55" y2="1">
+          <stop offset="0" stopColor="#7cf3d8" />
+          <stop offset="1" stopColor="#2aa88f" />
         </linearGradient>
+        <linearGradient id="bmRight" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#42d4b6" />
+          <stop offset="1" stopColor="#137563" />
+        </linearGradient>
+        <linearGradient id="bmLeft" x1="0" y1="0" x2="0.2" y2="1">
+          <stop offset="0" stopColor="#1e6259" />
+          <stop offset="1" stopColor="#0a2321" />
+        </linearGradient>
+        <linearGradient id="bmCut" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#ffe1a0" />
+          <stop offset="0.45" stopColor="#ffb224" />
+          <stop offset="1" stopColor="#ff8c00" />
+        </linearGradient>
+        <linearGradient id="bmEdge" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#8af7de" stopOpacity="0.85" />
+          <stop offset="1" stopColor="#1d7d6c" stopOpacity="0.35" />
+        </linearGradient>
+        <filter id="bmGlow" x="-60%" y="-60%" width="220%" height="220%">
+          <feGaussianBlur stdDeviation="14" />
+        </filter>
       </defs>
-      <path
-        d="M512 190 806 360 806 690 512 860 218 690 218 360Z"
+      <rect width="1024" height="1024" rx="232" fill="url(#bmBg)" />
+      <rect
+        x="8"
+        y="8"
+        width="1008"
+        height="1008"
+        rx="224"
         fill="none"
-        stroke="#3ecfb2"
-        strokeWidth="30"
+        stroke="url(#bmRim)"
+        strokeWidth="3"
+      />
+      <circle cx="512" cy="500" r="360" fill="url(#bmHalo)" />
+      <g filter="url(#bmGlow)" opacity="0.55">
+        <path
+          d="M749.46 379.66 L300.34 682.59 L274.54 644.34 L723.66 341.41 Z"
+          fill="#ffb224"
+        />
+      </g>
+      <path
+        d="M749.46 379.66 L761.64 386.68 L761.64 675.58 L524.90 812.00 L300.34 682.59 L274.54 644.34 L262.36 637.32 L262.36 348.42 L499.10 212.00 L723.66 341.41 Z"
+        fill="none"
+        stroke="url(#bmEdge)"
+        strokeWidth="7"
         strokeLinejoin="round"
       />
-      <path d="M512 190 806 360 512 530 218 360Z" fill="#1b2a2c" />
-      <path d="M512 530 806 360 806 690 512 860Z" fill="url(#stk-face)" opacity="0.4" />
-      <path d="M512 530 218 360 218 690 512 860Z" fill="#0e1518" opacity="0.8" />
+      <path d="M749.46 379.66 L761.64 386.68 L524.90 531.13 Z" fill="url(#bmTop)" />
       <path
-        d="M512 190v340M218 360l294 170 294-170M512 530v330"
-        fill="none"
-        stroke="#3ecfb2"
-        strokeWidth="18"
-        opacity="0.8"
+        d="M499.10 212.00 L723.66 341.41 L499.10 492.87 L262.36 348.42 Z"
+        fill="url(#bmTop)"
       />
-      <path d="M180 620 844 480" stroke="url(#stk-cut)" strokeWidth="42" strokeLinecap="round" />
       <path
-        d="M180 620 844 480"
-        stroke="#ffe4a8"
-        strokeWidth="10"
+        d="M524.90 531.13 L761.64 386.68 L761.64 675.58 L524.90 812.00 Z"
+        fill="url(#bmRight)"
+      />
+      <path d="M524.90 531.13 L524.90 812.00 L300.34 682.59 Z" fill="url(#bmLeft)" />
+      <path
+        d="M499.10 492.87 L274.54 644.34 L262.36 637.32 L262.36 348.42 Z"
+        fill="url(#bmLeft)"
+      />
+      <path
+        d="M749.46 379.66 L300.34 682.59 L274.54 644.34 L723.66 341.41 Z"
+        fill="url(#bmCut)"
+      />
+      <path
+        d="M749.46 379.66L300.34 682.59"
+        stroke="#fff2cd"
+        strokeWidth="3.5"
         strokeLinecap="round"
-        opacity="0.95"
+        opacity="0.7"
       />
-      <circle cx="512" cy="550" r="22" fill="#ffb224" />
     </svg>
   );
 }

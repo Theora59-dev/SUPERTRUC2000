@@ -107,9 +107,11 @@ button {
 }
 
 .brand-mark {
-  width: 34px;
-  height: 34px;
-  filter: drop-shadow(0 0 14px rgba(255, 178, 36, 0.18));
+  width: 38px;
+  height: 38px;
+  flex: none;
+  filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.45))
+    drop-shadow(0 0 12px rgba(62, 207, 178, 0.16));
 }
 
 .brand-text {
@@ -121,12 +123,12 @@ button {
 .brand-name {
   font-size: 15px;
   font-weight: 800;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.16em;
 }
 
 .brand-name em {
   font-style: normal;
-  color: var(--accent);
+  color: var(--teal);
 }
 
 .brand-sub {

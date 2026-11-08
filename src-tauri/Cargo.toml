@@ -1,13 +1,13 @@
 [package]
-name = "supertruc2000"
+name = "polyforma"
 version = "0.1.0"
 description = "Atelier de découpe et de préparation de grands modèles 3D pour l'impression"
-authors = ["SUPERTRUC 2000"]
+authors = ["Polyforma"]
 edition = "2021"
 rust-version = "1.77"
 
 [lib]
-name = "supertruc2000_lib"
+name = "polyforma_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

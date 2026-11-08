@@ -759,7 +759,7 @@ pub fn write_3mf(meshes: &[(String, &Mesh)], path: &Path) -> Result<(), String> 
     xml.push('\n');
     xml.push_str(r#"<model unit="millimeter" xml:lang="fr-FR" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:m="http://schemas.microsoft.com/3dmanufacturing/material/2015/02">"#);
     xml.push('\n');
-    xml.push_str("<metadata name=\"Application\">SUPERTRUC 2000</metadata>\n<resources>\n");
+    xml.push_str("<metadata name=\"Application\">Polyforma</metadata>\n<resources>\n");
 
     // Un groupe `basematerials` par pièce colorée, avec les identifiants
     // n+1..2n pour ne pas entrer en collision avec les objets 1..n.
@@ -907,7 +907,7 @@ mod tests {
     fn color_roundtrip() {
         let mesh = colored_cube();
         let path = std::env::temp_dir().join(format!(
-            "supertruc-color-test-{}.3mf",
+            "polyforma-color-test-{}.3mf",
             std::process::id()
         ));
         write_3mf(&[("Cube".to_string(), &mesh)], &path).unwrap();

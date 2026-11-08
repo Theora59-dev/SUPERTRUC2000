@@ -1,4 +1,4 @@
-//! SUPERTRUC 2000 — atelier de découpe et de préparation de grands modèles 3D.
+//! Polyforma — atelier de découpe et de préparation de grands modèles 3D.
 
 pub mod commands;
 pub mod cut;
@@ -34,5 +34,5 @@ pub fn run() {
             commands::export_parts,
         ])
         .run(tauri::generate_context!())
-        .expect("Erreur au lancement de SUPERTRUC 2000");
+        .expect("Erreur au lancement de Polyforma");
 }

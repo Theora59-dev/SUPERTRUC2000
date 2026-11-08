@@ -68,7 +68,7 @@ pub fn write_stl_binary(mesh: &Mesh, path: &Path) -> Result<(), String> {
     let file = File::create(path).map_err(|e| format!("Impossible de créer {}: {e}", path.display()))?;
     let mut w = BufWriter::new(file);
     let mut header = [0u8; 80];
-    let tag = b"SUPERTRUC2000 binary STL";
+    let tag = b"POLYFORMA binary STL";
     header[..tag.len()].copy_from_slice(tag);
     w.write_all(&header).map_err(io_err)?;
     w.write_all(&(tri_count as u32).to_le_bytes()).map_err(io_err)?;
@@ -119,7 +119,7 @@ mod tests {
         let mut soup = Vec::new();
         soup.extend_from_slice(&[[0.0f32, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]);
         let mesh = Mesh::from_soup(&soup);
-        let dir = std::env::temp_dir().join("supertruc2000-test");
+        let dir = std::env::temp_dir().join("polyforma-test");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("tri.stl");
         write_stl_binary(&mesh, &path).unwrap();

@@ -1,26 +1,57 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="Polyforma">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#161a20"/>
-      <stop offset="1" stop-color="#08090b"/>
+    <radialGradient id="pfBg" cx="0.5" cy="0.3" r="0.9">
+      <stop offset="0" stop-color="#1b2530"/>
+      <stop offset="0.55" stop-color="#0d1218"/>
+      <stop offset="1" stop-color="#06080b"/>
+    </radialGradient>
+    <radialGradient id="pfHalo" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#3ecfb2" stop-opacity="0.22"/>
+      <stop offset="0.6" stop-color="#3ecfb2" stop-opacity="0.05"/>
+      <stop offset="1" stop-color="#3ecfb2" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="pfRim" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.16"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0.04"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.10"/>
     </linearGradient>
-    <linearGradient id="cut" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#ffb224" stop-opacity="0"/>
-      <stop offset="0.5" stop-color="#ffb224"/>
-      <stop offset="1" stop-color="#ffb224" stop-opacity="0"/>
+    <linearGradient id="pfTop" x1="0.1" y1="0" x2="0.55" y2="1">
+      <stop offset="0" stop-color="#7cf3d8"/>
+      <stop offset="1" stop-color="#2aa88f"/>
     </linearGradient>
-    <linearGradient id="face" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#3ecfb2"/>
-      <stop offset="1" stop-color="#1d7d6c"/>
+    <linearGradient id="pfRight" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#42d4b6"/>
+      <stop offset="1" stop-color="#137563"/>
     </linearGradient>
+    <linearGradient id="pfLeft" x1="0" y1="0" x2="0.2" y2="1">
+      <stop offset="0" stop-color="#1e6259"/>
+      <stop offset="1" stop-color="#0a2321"/>
+    </linearGradient>
+    <linearGradient id="pfCut" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffe1a0"/>
+      <stop offset="0.45" stop-color="#ffb224"/>
+      <stop offset="1" stop-color="#ff8c00"/>
+    </linearGradient>
+    <linearGradient id="pfEdge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8af7de" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#1d7d6c" stop-opacity="0.35"/>
+    </linearGradient>
+    <filter id="pfGlow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="14"/>
+    </filter>
   </defs>
-  <rect width="1024" height="1024" rx="220" fill="url(#bg)"/>
-  <path d="M512 190 L806 360 L806 690 L512 860 L218 690 L218 360 Z" fill="none" stroke="#3ecfb2" stroke-width="26" stroke-linejoin="round"/>
-  <path d="M512 190 L806 360 L512 530 L218 360 Z" fill="#1b2a2c" opacity="0.9"/>
-  <path d="M512 530 L806 360 L806 690 L512 860 Z" fill="url(#face)" opacity="0.35"/>
-  <path d="M512 530 L218 360 L218 690 L512 860 Z" fill="#0e1518" opacity="0.7"/>
-  <path d="M512 190 L512 530 M218 360 L512 530 L806 360 M512 530 L512 860" fill="none" stroke="#3ecfb2" stroke-width="16" opacity="0.8"/>
-  <path d="M180 620 L844 480" stroke="url(#cut)" stroke-width="34" stroke-linecap="round"/>
-  <path d="M180 620 L844 480" stroke="#ffe4a8" stroke-width="8" stroke-linecap="round" opacity="0.9"/>
-  <circle cx="512" cy="550" r="20" fill="#ffb224"/>
+  <rect width="1024" height="1024" rx="232" fill="url(#pfBg)"/>
+  <rect x="8" y="8" width="1008" height="1008" rx="224" fill="none" stroke="url(#pfRim)" stroke-width="3"/>
+  <circle cx="512" cy="500" r="360" fill="url(#pfHalo)"/>
+  <g filter="url(#pfGlow)" opacity="0.55">
+    <path d="M749.46 379.66 L300.34 682.59 L274.54 644.34 L723.66 341.41 Z" fill="#ffb224"/>
+  </g>
+    <path d="M749.46 379.66 L761.64 386.68 L761.64 675.58 L524.90 812.00 L300.34 682.59 L274.54 644.34 L262.36 637.32 L262.36 348.42 L499.10 212.00 L723.66 341.41 Z" fill="none" stroke="url(#pfEdge)" stroke-width="7" stroke-linejoin="round"/>
+    <path d="M749.46 379.66 L761.64 386.68 L524.90 531.13 Z" fill="url(#pfTop)"/>
+    <path d="M499.10 212.00 L723.66 341.41 L499.10 492.87 L262.36 348.42 Z" fill="url(#pfTop)"/>
+    <path d="M524.90 531.13 L761.64 386.68 L761.64 675.58 L524.90 812.00 Z" fill="url(#pfRight)"/>
+    <path d="M524.90 531.13 L524.90 812.00 L300.34 682.59 Z" fill="url(#pfLeft)"/>
+    <path d="M499.10 492.87 L274.54 644.34 L262.36 637.32 L262.36 348.42 Z" fill="url(#pfLeft)"/>
+    <path d="M749.46 379.66 L300.34 682.59 L274.54 644.34 L723.66 341.41 Z" fill="url(#pfCut)"/>
+    <path d="M749.46 379.66L300.34 682.59" stroke="#fff2cd" stroke-width="3.5" stroke-linecap="round" opacity="0.7"/>
 </svg>

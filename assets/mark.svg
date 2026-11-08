@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="Polyforma">
+  <defs>
+    <linearGradient id="pmTop" x1="0.1" y1="0" x2="0.55" y2="1">
+      <stop offset="0" stop-color="#7cf3d8"/>
+      <stop offset="1" stop-color="#2aa88f"/>
+    </linearGradient>
+    <linearGradient id="pmRight" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#42d4b6"/>
+      <stop offset="1" stop-color="#137563"/>
+    </linearGradient>
+    <linearGradient id="pmLeft" x1="0" y1="0" x2="0.2" y2="1">
+      <stop offset="0" stop-color="#1e6259"/>
+      <stop offset="1" stop-color="#0a2321"/>
+    </linearGradient>
+    <linearGradient id="pmCut" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffe1a0"/>
+      <stop offset="0.45" stop-color="#ffb224"/>
+      <stop offset="1" stop-color="#ff8c00"/>
+    </linearGradient>
+    <linearGradient id="pmEdge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8af7de" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#1d7d6c" stop-opacity="0.35"/>
+    </linearGradient>
+    <filter id="pmGlow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="14"/>
+    </filter>
+  </defs>
+  <g filter="url(#pmGlow)" opacity="0.5">
+    <path d="M749.46 379.66 L300.34 682.59 L274.54 644.34 L723.66 341.41 Z" fill="#ffb224"/>
+  </g>
+    <path d="M749.46 379.66 L761.64 386.68 L761.64 675.58 L524.90 812.00 L300.34 682.59 L274.54 644.34 L262.36 637.32 L262.36 348.42 L499.10 212.00 L723.66 341.41 Z" fill="none" stroke="url(#pmEdge)" stroke-width="7" stroke-linejoin="round"/>
+    <path d="M749.46 379.66 L761.64 386.68 L524.90 531.13 Z" fill="url(#pmTop)"/>
+    <path d="M499.10 212.00 L723.66 341.41 L499.10 492.87 L262.36 348.42 Z" fill="url(#pmTop)"/>
+    <path d="M524.90 531.13 L761.64 386.68 L761.64 675.58 L524.90 812.00 Z" fill="url(#pmRight)"/>
+    <path d="M524.90 531.13 L524.90 812.00 L300.34 682.59 Z" fill="url(#pmLeft)"/>
+    <path d="M499.10 492.87 L274.54 644.34 L262.36 637.32 L262.36 348.42 Z" fill="url(#pmLeft)"/>
+    <path d="M749.46 379.66 L300.34 682.59 L274.54 644.34 L723.66 341.41 Z" fill="url(#pmCut)"/>
+    <path d="M749.46 379.66L300.34 682.59" stroke="#fff2cd" stroke-width="3.5" stroke-linecap="round" opacity="0.7"/>
+</svg>

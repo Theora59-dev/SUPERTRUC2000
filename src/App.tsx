@@ -905,7 +905,7 @@ export default function App() {
           <BrandMark />
           <div className="brand-text">
             <div className="brand-name">
-              SUPER<em>TRUC</em> 2000
+              POLY<em>FORMA</em>
             </div>
             <div className="brand-sub">Atelier de découpe 3D</div>
           </div>

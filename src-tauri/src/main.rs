@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    supertruc2000_lib::run()
+    polyforma_lib::run()
 }

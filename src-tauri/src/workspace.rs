@@ -947,7 +947,7 @@ mod tests {
     #[test]
     fn export_roundtrip_all_formats() {
         let dir = std::env::temp_dir().join(format!(
-            "supertruc-export-test-{}",
+            "polyforma-export-test-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);

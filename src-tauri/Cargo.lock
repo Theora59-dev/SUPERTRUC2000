@@ -2281,6 +2281,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "polyforma"
+version = "0.1.0"
+dependencies = [
+ "earcutr",
+ "glam",
+ "quick-xml 0.38.4",
+ "rayon",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "thiserror 2.0.21",
+ "zip",
+]
+
+[[package]]
 name = "portable-atomic"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2986,23 +3003,6 @@ name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
-
-[[package]]
-name = "supertruc2000"
-version = "0.1.0"
-dependencies = [
- "earcutr",
- "glam",
- "quick-xml 0.38.4",
- "rayon",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "thiserror 2.0.21",
- "zip",
-]
 
 [[package]]
 name = "swift-rs"

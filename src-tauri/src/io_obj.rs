@@ -66,7 +66,7 @@ pub fn load_obj(bytes: &[u8]) -> Result<Mesh, String> {
 pub fn write_obj(meshes: &[(String, &Mesh)], path: &Path) -> Result<(), String> {
     let file = File::create(path).map_err(|e| format!("Impossible de créer {}: {e}", path.display()))?;
     let mut w = BufWriter::new(file);
-    writeln!(w, "# Export SUPERTRUC 2000").map_err(err)?;
+    writeln!(w, "# Export Polyforma").map_err(err)?;
     let mut base: u32 = 1;
     for (name, mesh) in meshes {
         writeln!(w, "o {}", sanitize(name)).map_err(err)?;
