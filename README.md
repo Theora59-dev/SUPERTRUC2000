@@ -186,10 +186,13 @@ SUPERTRUC2000/
   triangles adjacents). Cela évite le coût du JSON pour les gros maillages.
 - **Cache d'aperçu** : chaque pièce possède une `revision` ; le frontend ne recharge la géométrie
   que lorsque celle-ci change.
-- **Découpe sans CSG** : les bouchons de coupe sont triangulés avec `earcutr`. Les connecteurs
-  sont des cylindres : des tenons sur la pièce négative et des logements percés depuis le plan sur
-  la pièce positive, ce qui reste rapide et robuste. La tolérance est ajoutée au rayon des
-  logements.
+- **Découpe sans CSG** : les bouchons de coupe sont triangulés avec `earcutr`. Le contour de
+  section est d'abord équilibré (fusion des sommets confondus ou déséquilibrés), puis les
+  fissures résiduelles laissées sur le plan par la triangulation sont comblées à la soudure
+  (`seal_open_boundaries`), ce qui garantit des demi-pièces étanches même sur un modèle
+  non-manifold. Les connecteurs sont des cylindres : des tenons sur la pièce négative et des
+  logements percés depuis le plan sur la pièce positive, ce qui reste rapide et robuste. La
+  tolérance est ajoutée au rayon des logements.
 - **Couleurs par triangle** : `Mesh.tri_colors` stocke une couleur RGB par triangle (vide si le
   modèle n'en a pas). Toutes les opérations qui reconstruisent le maillage propagent ces couleurs ;
   l'export 3MF écrit un groupe `basematerials` par pièce avec `pid`/`p1` sur chaque triangle.

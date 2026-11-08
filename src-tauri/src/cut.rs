@@ -93,7 +93,8 @@ pub struct CutResult {
 struct Side {
     tris: Vec<[u32; 3]>,
     colors: Vec<[u8; 3]>,
-    cap_edges: HashSet<(u32, u32)>,
+    /// Arêtes de découpe orientées, dans l'ordre des polygones clippés.
+    cap_edges: Vec<(u32, u32)>,
 }
 
 impl Side {
@@ -103,11 +104,9 @@ impl Side {
     }
 
     fn add_cap_edge(&mut self, a: u32, b: u32) {
-        if a == b {
-            return;
+        if a != b {
+            self.cap_edges.push((a, b));
         }
-        let key = if a < b { (a, b) } else { (b, a) };
-        self.cap_edges.insert(key);
     }
 }
 
@@ -187,9 +186,10 @@ pub fn cut_mesh(mesh: &Mesh, plane: &Plane, opts: &CutOptions) -> Result<CutResu
 
     let mut warnings = Vec::new();
 
+
     // Bouchons : normale +n côté négatif, -n côté positif.
-    let mut neg_loops = build_cap_loops(&neg.cap_edges, &pos, plane, 1.0);
-    let mut pos_loops = build_cap_loops(&posi.cap_edges, &pos, plane, -1.0);
+    let (mut neg_loops, neg_remap) = build_cap_loops(&neg.cap_edges, &pos, plane);
+    let (mut pos_loops, pos_remap) = build_cap_loops(&posi.cap_edges, &pos, plane);
     if neg_loops.is_empty() {
         warnings.push(
             "Aucune boucle de découpe détectée côté inférieur (maillage ouvert ?).".into(),
@@ -201,8 +201,8 @@ pub fn cut_mesh(mesh: &Mesh, plane: &Plane, opts: &CutOptions) -> Result<CutResu
         );
     }
 
-    let neg_regions = nest_loops(&mut neg_loops);
-    let pos_regions = nest_loops(&mut pos_loops);
+    let neg_regions = nest_loops(&mut neg_loops, -1.0);
+    let pos_regions = nest_loops(&mut pos_loops, 1.0);
 
     let cap_area: f64 = pos_regions
         .iter()
@@ -322,8 +322,15 @@ pub fn cut_mesh(mesh: &Mesh, plane: &Plane, opts: &CutOptions) -> Result<CutResu
         }
     }
 
+    // Les sommets fusionnés pour équilibrer la section doivent l'être aussi
+    // dans la surface : bouchons et surface partagent alors les mêmes indices.
+    remap_tris(&mut neg_tris, &neg_remap);
+    remap_tris(&mut pos_tris, &pos_remap);
+
+
     let negative = build_mesh(&neg_tris, &neg_colors, &pos, colored);
     let positive = build_mesh(&pos_tris, &pos_colors, &pos, colored);
+
 
     if negative.is_empty() || positive.is_empty() {
         return Err("La découpe n'a produit aucune pièce exploitable.".into());
@@ -465,70 +472,125 @@ fn polygon_area(poly: &[u32], pos: &[DVec3]) -> f64 {
     sum.length() * 0.5
 }
 
+/// Reconstruit les boucles de découpe à partir des arêtes orientées.
+///
+/// Les arêtes proviennent directement des polygones clippés : leurs extrémités
+/// sont des indices de sommets existants, partagés par les triangles voisins.
+/// On n'effectue donc **aucun recalage** de position.
+///
+/// Sur un modèle multicolore, les surfaces de composants accolés produisent des
+/// paires de sommets quasi confondus dont les déséquilibres sont opposés (±1) :
+/// le graphe de section n'est alors pas équilibré et les boucles restent
+/// ouvertes. Ces paires sont fusionnées (les plus proches d'abord) ; la table de
+/// fusion est renvoyée pour être appliquée aux triangles de surface, afin que
+/// bouchons et surface partagent les mêmes identifiants.
+///
+/// Une fois le graphe équilibré (autant d'arêtes entrantes que sortantes en
+/// chaque sommet), un parcours glouton se referme toujours : chaque arête est
+/// bouchée par exactement une boucle.
 fn build_cap_loops(
-    edges: &HashSet<(u32, u32)>,
+    edges: &[(u32, u32)],
     pos: &[DVec3],
     plane: &Plane,
-    desired_sign: f64,
-) -> Vec<CapLoop> {
+) -> (Vec<CapLoop>, HashMap<u32, u32>) {
     if edges.is_empty() {
-        return Vec::new();
+        return (Vec::new(), HashMap::new());
     }
-    let mut sorted: Vec<(u32, u32)> = edges.iter().copied().collect();
-    sorted.sort_unstable();
-    let mut adj: HashMap<u32, Vec<u32>> = HashMap::new();
-    for &(a, b) in &sorted {
-        adj.entry(a).or_default().push(b);
-        adj.entry(b).or_default().push(a);
-    }
-    let mut used: HashSet<(u32, u32)> = HashSet::with_capacity(sorted.len());
-    let mut loops = Vec::new();
 
-    for &(start_a, start_b) in &sorted {
-        let key0 = (start_a.min(start_b), start_a.max(start_b));
-        if used.contains(&key0) {
+    // Arêtes orientées avec leur multiplicité. Les surfaces confondues des
+    // modèles multicolores produisent des arêtes identiques : les fusionner
+    // désequilibrerait le graphe, donc on conserve le nombre d'occurrences.
+    let mut initial: HashMap<(u32, u32), u32> = HashMap::with_capacity(edges.len());
+    for &(a, b) in edges {
+        if a != b {
+            *initial.entry((a, b)).or_default() += 1;
+        }
+    }
+
+    // Deux sommets distincts peuvent occuper exactement la même position sur
+    // le plan de coupe (contact entre deux lobes du contour). Les laisser
+    // séparés produit des arêtes de longueur nulle que la soudure du maillage
+    // élimine ensuite, laissant des fissures. On les fusionne d'abord.
+    let remap_coincident = merge_coincident(&mut initial, pos, plane);
+    let (mut remaining, remap_unbalanced) = merge_unbalanced(&initial, pos, plane);
+    // Compose : les identifiants d'origine fusionnés par coïncidence doivent
+    // pointer vers la cible finale de l'équilibrage.
+    let mut remap: HashMap<u32, u32> = HashMap::with_capacity(remap_coincident.len() + remap_unbalanced.len());
+    for (&k, &v) in &remap_coincident {
+        remap.insert(k, *remap_unbalanced.get(&v).unwrap_or(&v));
+    }
+    for (&k, &v) in &remap_unbalanced {
+        remap.entry(k).or_insert(v);
+    }
+    let total_edges: usize = remaining.values().map(|&c| c as usize).sum();
+    if total_edges == 0 {
+        return (Vec::new(), remap);
+    }
+
+    let mut starts: Vec<(u32, u32)> = remaining.keys().copied().collect();
+    starts.sort_unstable();
+    let mut out_edges: HashMap<u32, Vec<u32>> = HashMap::new();
+    for &(a, b) in &starts {
+        out_edges.entry(a).or_default().push(b);
+    }
+
+    let mut loops: Vec<CapLoop> = Vec::new();
+
+    for &(start_a, start_b) in &starts {
+        if remaining.get(&(start_a, start_b)).copied().unwrap_or(0) == 0 {
             continue;
         }
-        let mut ids = vec![start_a];
+        let mut ids: Vec<u32> = vec![start_a];
         let mut prev = start_a;
         let mut cur = start_b;
-        used.insert(key0);
+        *remaining.get_mut(&(start_a, start_b)).unwrap() -= 1;
         let mut closed = false;
-        for _ in 0..=sorted.len() {
+        for _ in 0..=total_edges {
             if cur == start_a {
                 closed = true;
                 break;
             }
             ids.push(cur);
-            let neighbors = match adj.get(&cur) {
-                Some(n) => n,
-                None => break,
+            let Some(candidates) = out_edges.get(&cur) else {
+                break;
             };
-            let mut next = None;
-            for &n in neighbors {
-                if n == prev {
+            let p_prev = plane.to2d(pos[prev as usize]);
+            let p_cur = plane.to2d(pos[cur as usize]);
+            let reverse = p_prev - p_cur;
+            let mut best: Option<(u32, f64)> = None;
+            // Retour immédiat par l'arête inverse : à n'utiliser qu'en dernier
+            // recours, sinon on refermerait une boucle de deux sommets (aire
+            // nulle) au lieu de suivre le contour de la section.
+            let mut fallback: Option<(u32, f64)> = None;
+            for &cand in candidates {
+                if remaining.get(&(cur, cand)).copied().unwrap_or(0) == 0 {
                     continue;
                 }
-                let k = (cur.min(n), cur.max(n));
-                if !used.contains(&k) {
-                    next = Some(n);
-                    break;
-                }
-            }
-            if next.is_none() {
-                for &n in neighbors {
-                    let k = (cur.min(n), cur.max(n));
-                    if !used.contains(&k) {
-                        next = Some(n);
-                        break;
+                let d = plane.to2d(pos[cand as usize]) - p_cur;
+                let cross = reverse.x * d.y - reverse.y * d.x;
+                let dot = reverse.dot(d);
+                let angle = cross.atan2(dot);
+                // Distance angulaire parcourue dans le sens horaire depuis
+                // l'arête inverse, dans [0, 2π].
+                let rot = if angle <= 0.0 {
+                    -angle
+                } else {
+                    std::f64::consts::TAU - angle
+                };
+                if cand == prev {
+                    if fallback.map(|(_, a)| rot < a).unwrap_or(true) {
+                        fallback = Some((cand, rot));
                     }
+                    continue;
+                }
+                if best.map(|(_, a)| rot < a).unwrap_or(true) {
+                    best = Some((cand, rot));
                 }
             }
-            let Some(n) = next else { break };
-            let k = (cur.min(n), cur.max(n));
-            used.insert(k);
+            let Some((next, _)) = best.or(fallback) else { break };
+            *remaining.get_mut(&(cur, next)).unwrap() -= 1;
             prev = cur;
-            cur = n;
+            cur = next;
         }
         if !closed || ids.len() < 3 {
             continue;
@@ -540,27 +602,230 @@ fn build_cap_loops(
         if ids.len() < 3 {
             continue;
         }
-        let mut pts2: Vec<DVec2> = ids
-            .iter()
-            .map(|&id| plane.to2d(pos[id as usize]))
-            .collect();
-        let mut area2 = signed_area2(&pts2);
-        if area2.abs() < 1e-12 {
+        // Une boucle peut repasser par un même sommet (jonction
+        // non-manifold). On la coupe en cycles simples, sinon la
+        // triangulation du bouchon ne conserve pas toutes les arêtes.
+        for simple in split_simple_cycles(&ids) {
+            let pts2: Vec<DVec2> = simple
+                .iter()
+                .map(|&id| plane.to2d(pos[id as usize]))
+                .collect();
+            let area2 = signed_area2(&pts2);
+            if area2.abs() < 1e-12 {
+                continue;
+            }
+            loops.push(CapLoop {
+                ids: simple,
+                pts2,
+                area2,
+                depth: 0,
+            });
+        }
+    }
+
+    (loops, remap)
+}
+
+/// Coupe un circuit fermé en cycles simples aux sommets visités plusieurs fois.
+///
+/// Une section non-manifold peut passer deux fois par le même sommet (deux
+/// lobes accolés). Chaque lobe doit être triangulé séparément pour que toutes
+/// les arêtes du contour restent présentes dans le bouchon.
+fn split_simple_cycles(ids: &[u32]) -> Vec<Vec<u32>> {
+    let mut out: Vec<Vec<u32>> = Vec::new();
+    let mut stack: Vec<u32> = Vec::new();
+    let mut pos: HashMap<u32, usize> = HashMap::new();
+    for &v in ids {
+        if let Some(&at) = pos.get(&v) {
+            if stack.len() - at >= 3 {
+                out.push(stack[at..].to_vec());
+            }
+            for &w in &stack[at + 1..] {
+                pos.remove(&w);
+            }
+            stack.truncate(at + 1);
+        } else {
+            pos.insert(v, stack.len());
+            stack.push(v);
+        }
+    }
+    if stack.len() >= 3 {
+        out.push(stack);
+    }
+    out
+}
+
+/// Fusionne les sommets du contour occupant la même position sur le plan.
+///
+/// Un contact ponctuel entre deux lobes de la section produit deux sommets
+/// distincts à la même position. Le graphe reste équilibré, mais les arêtes de
+/// longueur nulle disparaissent à la soudure du maillage et laissent des
+/// fissures. Fusionner ces sommets rend le contour simple avant triangulation.
+fn merge_coincident(
+    initial: &mut HashMap<(u32, u32), u32>,
+    pos: &[DVec3],
+    plane: &Plane,
+) -> HashMap<u32, u32> {
+    let mut verts: Vec<u32> = Vec::new();
+    {
+        let mut seen: HashSet<u32> = HashSet::new();
+        for &(a, b) in initial.keys() {
+            if seen.insert(a) {
+                verts.push(a);
+            }
+            if seen.insert(b) {
+                verts.push(b);
+            }
+        }
+    }
+    verts.sort_unstable();
+    let tol = 1e-7;
+    let inv = 1.0 / tol;
+    let mut buckets: HashMap<(i64, i64), usize> = HashMap::new();
+    let mut canon: Vec<u32> = Vec::new();
+    let mut canon_pts: Vec<DVec2> = Vec::new();
+    let mut remap: HashMap<u32, u32> = HashMap::new();
+    for id in verts {
+        let p = plane.to2d(pos[id as usize]);
+        let key = ((p.x * inv).round() as i64, (p.y * inv).round() as i64);
+        let mut found: Option<usize> = None;
+        'search: for dx in -1..=1 {
+            for dy in -1..=1 {
+                if let Some(&ci) = buckets.get(&(key.0 + dx, key.1 + dy)) {
+                    if (canon_pts[ci] - p).length() <= tol {
+                        found = Some(ci);
+                        break 'search;
+                    }
+                }
+            }
+        }
+        match found {
+            Some(ci) => {
+                remap.insert(id, canon[ci]);
+            }
+            None => {
+                let ci = canon.len();
+                canon.push(id);
+                canon_pts.push(p);
+                buckets.insert(key, ci);
+            }
+        }
+    }
+    if remap.is_empty() {
+        return remap;
+    }
+    let mut out: HashMap<(u32, u32), u32> = HashMap::with_capacity(initial.len());
+    for (&(a, b), &count) in initial.iter() {
+        let a = *remap.get(&a).unwrap_or(&a);
+        let b = *remap.get(&b).unwrap_or(&b);
+        if a == b {
             continue;
         }
-        if area2 * desired_sign < 0.0 {
-            ids.reverse();
-            pts2.reverse();
-            area2 = -area2;
-        }
-        loops.push(CapLoop {
-            ids,
-            pts2,
-            area2,
-            depth: 0,
-        });
+        *out.entry((a, b)).or_default() += count;
     }
-    loops
+    *initial = out;
+    remap
+}
+
+/// Équilibre le graphe de section en fusionnant les sommets déséquilibrés.
+///
+/// Le déséquilibre d'un sommet vaut `sortantes - entrantes`. Deux sommets quasi
+/// confondus de déséquilibre `+1` et `-1` proviennent de deux composants
+/// accolés : les identifier referme l'interstice et rétablit l'équilibre. Les
+/// paires les plus proches sont traitées d'abord, et la fusion se propage
+/// jusqu'à ce qu'il ne reste plus aucun déséquilibre.
+fn merge_unbalanced(
+    edges: &HashMap<(u32, u32), u32>,
+    pos: &[DVec3],
+    plane: &Plane,
+) -> (HashMap<(u32, u32), u32>, HashMap<u32, u32>) {
+    fn find(parent: &mut HashMap<u32, u32>, x: u32) -> u32 {
+        let mut root = x;
+        while let Some(&p) = parent.get(&root) {
+            if p == root {
+                break;
+            }
+            root = p;
+        }
+        let mut cur = x;
+        while let Some(&p) = parent.get(&cur) {
+            if p == cur {
+                break;
+            }
+            parent.insert(cur, root);
+            cur = p;
+        }
+        root
+    }
+
+    let mut parent: HashMap<u32, u32> = HashMap::new();
+    for &(a, b) in edges.keys() {
+        parent.entry(a).or_insert(a);
+        parent.entry(b).or_insert(b);
+    }
+
+    let max_unions = parent.len().max(1);
+    for _ in 0..max_unions {
+        let mut delta: HashMap<u32, i64> = HashMap::new();
+        for (&(a, b), &count) in edges {
+            let ra = find(&mut parent, a);
+            let rb = find(&mut parent, b);
+            *delta.entry(ra).or_default() += count as i64;
+            *delta.entry(rb).or_default() -= count as i64;
+        }
+
+        let mut positives: Vec<u32> = delta
+            .iter()
+            .filter(|(_, &d)| d > 0)
+            .map(|(&v, _)| v)
+            .collect();
+        let mut negatives: Vec<u32> = delta
+            .iter()
+            .filter(|(_, &d)| d < 0)
+            .map(|(&v, _)| v)
+            .collect();
+        if positives.is_empty() || negatives.is_empty() {
+            break;
+        }
+        // Tri pour un résultat déterministe (l'ordre des HashMap varie).
+        positives.sort_unstable();
+        negatives.sort_unstable();
+
+        let mut best: Option<(f64, u32, u32)> = None;
+        for &p in &positives {
+            let pp = plane.to2d(pos[p as usize]);
+            for &n in &negatives {
+                let q = plane.to2d(pos[n as usize]);
+                let dist = (pp - q).length_squared();
+                if best.map(|(d, _, _)| dist < d).unwrap_or(true) {
+                    best = Some((dist, p, n));
+                }
+            }
+        }
+        let Some((_dist, p, n)) = best else { break };
+        // Représentant : le plus petit identifiant, pour rester déterministe.
+        let (keep, gone) = if p < n { (p, n) } else { (n, p) };
+        parent.insert(gone, keep);
+    }
+
+    let mut merged: HashMap<(u32, u32), u32> = HashMap::with_capacity(edges.len());
+    for (&(a, b), &count) in edges {
+        let ra = find(&mut parent, a);
+        let rb = find(&mut parent, b);
+        if ra != rb {
+            *merged.entry((ra, rb)).or_default() += count;
+        }
+    }
+
+    let mut remap: HashMap<u32, u32> = HashMap::new();
+    let keys: Vec<u32> = parent.keys().copied().collect();
+    for v in keys {
+        let r = find(&mut parent, v);
+        if r != v {
+            remap.insert(v, r);
+        }
+    }
+    (merged, remap)
 }
 
 fn signed_area2(pts: &[DVec2]) -> f64 {
@@ -624,51 +889,83 @@ fn region_area(loops: &[CapLoop], region: &Region) -> f64 {
     a.max(0.0)
 }
 
-fn nest_loops(loops: &mut [CapLoop]) -> Vec<Region> {
-    for i in 0..loops.len() {
+/// Classe les boucles en régions de matière.
+///
+/// L'orientation d'une boucle indique de quel côté se trouve la matière : une
+/// boucle « pleine » délimite un solide, une boucle « creuse » délimite une
+/// cavité. `solid_sign` traduit la convention de parcours : le côté négatif
+/// produit des boucles horaires, le côté positif des boucles antihoraires.
+fn nest_loops(loops: &mut [CapLoop], solid_sign: f64) -> Vec<Region> {
+    let n = loops.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let areas: Vec<f64> = loops.iter().map(|l| l.abs_area()).collect();
+    let solid: Vec<bool> = loops
+        .iter()
+        .map(|l| l.area2 * solid_sign > 0.0)
+        .collect();
+
+    // Matrice de contenance (j contient i), avec filtre par aire.
+    let mut contains = vec![vec![false; n]; n];
+    for i in 0..n {
         let p = loops[i].pts2[0];
-        let ai = loops[i].abs_area();
-        let mut depth = 0usize;
-        for j in 0..loops.len() {
-            if i == j {
+        for j in 0..n {
+            if i == j || areas[j] <= areas[i] * (1.0 + 1e-9) {
                 continue;
             }
-            if loops[j].abs_area() > ai * (1.0 + 1e-9) && point_in_polygon(p, &loops[j].pts2) {
-                depth += 1;
+            if point_in_polygon(p, &loops[j].pts2) {
+                contains[j][i] = true;
             }
         }
-        loops[i].depth = depth;
     }
+
+    let mut solid_inside = vec![0usize; n];
+    let mut cavity_inside = vec![0usize; n];
+    for i in 0..n {
+        for j in 0..n {
+            if contains[j][i] {
+                if solid[j] {
+                    solid_inside[i] += 1;
+                } else {
+                    cavity_inside[i] += 1;
+                }
+            }
+        }
+        loops[i].depth = solid_inside[i] + cavity_inside[i];
+    }
+
+    // Toute boucle pleine délimite une région de matière ; les solides
+    // entièrement contenus dans une autre matière sont redondants mais restent
+    // bouchés (ils correspondent à des pièces imbriquées du modèle d'origine).
     let mut regions: Vec<Region> = Vec::new();
-    for i in 0..loops.len() {
-        if loops[i].depth % 2 == 0 {
+    for i in 0..n {
+        if solid[i] {
             regions.push(Region {
                 outer: i,
                 holes: Vec::new(),
             });
         }
     }
-    for i in 0..loops.len() {
-        if loops[i].depth % 2 == 0 {
+
+    // Chaque cavité est retirée de la plus petite région qui la contient.
+    for i in 0..n {
+        if solid[i] {
             continue;
         }
-        let p = loops[i].pts2[0];
-        let ai = loops[i].abs_area();
         let mut best: Option<usize> = None;
         let mut best_area = f64::INFINITY;
         for (ri, r) in regions.iter().enumerate() {
-            let outer = &loops[r.outer];
-            if outer.abs_area() > ai && point_in_polygon(p, &outer.pts2) {
-                if outer.abs_area() < best_area {
-                    best_area = outer.abs_area();
-                    best = Some(ri);
-                }
+            if contains[r.outer][i] && areas[r.outer] < best_area {
+                best_area = areas[r.outer];
+                best = Some(ri);
             }
         }
         if let Some(ri) = best {
             regions[ri].holes.push(i);
         }
     }
+
     regions
 }
 
@@ -924,6 +1221,62 @@ fn push_oriented(out: &mut Vec<[u32; 3]>, pos: &[DVec3], tri: [u32; 3], desired:
     }
 }
 
+/// Décale légèrement les sommets exactement colinéaires ou confondus d'un
+/// contour, vers l'extérieur de celui-ci.
+///
+/// Cela limite les cas dégénérés soumis à `earcut` sans changer la topologie
+/// du bouchon : les triangles produits référencent toujours les sommets
+/// d'origine. Les fissures résiduelles sont refermées ensuite par
+/// `Mesh::seal_open_boundaries`.
+fn jitter_degenerate(pts: &mut [DVec2]) {
+    let n = pts.len();
+    if n < 3 {
+        return;
+    }
+    let mut min = DVec2::splat(f64::INFINITY);
+    let mut max = DVec2::splat(f64::NEG_INFINITY);
+    for p in pts.iter() {
+        min = min.min(*p);
+        max = max.max(*p);
+    }
+    let scale = (max - min).length().max(1.0);
+    let eps = scale * 1e-7;
+    let area2 = signed_area2(pts);
+    let orient = if area2 >= 0.0 { 1.0 } else { -1.0 };
+    let orig = pts.to_vec();
+    for i in 0..n {
+        let prev = orig[(i + n - 1) % n];
+        let cur = orig[i];
+        let next = orig[(i + 1) % n];
+        let d1 = cur - prev;
+        let d2 = next - cur;
+        let cross = d1.x * d2.y - d1.y * d2.x;
+        let dup = (next - cur).length_squared() <= eps * eps;
+        if cross != 0.0 && !dup {
+            continue;
+        }
+        let mut dir = next - prev;
+        if dir.length_squared() <= 1e-24 {
+            dir = d2;
+        }
+        if dir.length_squared() <= 1e-24 {
+            dir = d1;
+        }
+        if dir.length_squared() <= 1e-24 {
+            continue;
+        }
+        dir = dir.normalize();
+        // Extérieur du contour : à droite du sens de parcours s'il est
+        // antihoraire, à gauche sinon.
+        let outward = if orient > 0.0 {
+            DVec2::new(dir.y, -dir.x)
+        } else {
+            DVec2::new(-dir.y, dir.x)
+        };
+        pts[i] = cur + outward * eps;
+    }
+}
+
 fn triangulate_cap(
     loops: &[CapLoop],
     regions: &[Region],
@@ -939,35 +1292,40 @@ fn triangulate_cap(
         if outer.ids.len() < 3 {
             continue;
         }
-        let mut coords: Vec<f64> = Vec::new();
-        let mut ids: Vec<u32> = Vec::new();
-        let mut hole_starts: Vec<usize> = Vec::new();
-
-        for &id in &outer.ids {
-            let p = plane.to2d(pos[id as usize]);
-            coords.push(p.x);
-            coords.push(p.y);
-            ids.push(id);
-        }
-        let mut add_hole = |ring: &[u32], coords: &mut Vec<f64>, ids: &mut Vec<u32>| {
-            if ring.len() < 3 {
-                return;
-            }
-            hole_starts.push(ids.len());
-            for &id in ring {
-                let p = plane.to2d(pos[id as usize]);
-                coords.push(p.x);
-                coords.push(p.y);
-                ids.push(id);
-            }
-        };
+        let mut rings: Vec<&[u32]> = Vec::with_capacity(1 + region.holes.len());
+        rings.push(outer.ids.as_slice());
         for &h in &region.holes {
-            add_hole(&loops[h].ids, &mut coords, &mut ids);
+            rings.push(loops[h].ids.as_slice());
         }
         for (hole_region, ring) in extra_holes {
             if *hole_region == ri {
-                add_hole(ring, &mut coords, &mut ids);
+                rings.push(ring.as_slice());
             }
+        }
+
+        let mut coords: Vec<f64> = Vec::new();
+        let mut ids: Vec<u32> = Vec::new();
+        let mut hole_starts: Vec<usize> = Vec::new();
+        for (k, ring) in rings.iter().enumerate() {
+            if ring.len() < 3 {
+                continue;
+            }
+            if k > 0 {
+                hole_starts.push(ids.len());
+            }
+            let mut pts2: Vec<DVec2> = ring
+                .iter()
+                .map(|&id| plane.to2d(pos[id as usize]))
+                .collect();
+            // Limite les cas dégénérés que `earcut` écarte (points confondus
+            // ou exactement colinéaires), sans modifier les identifiants
+            // produits. Les fissures éventuelles sont comblées à la soudure.
+            jitter_degenerate(&mut pts2);
+            for p in &pts2 {
+                coords.push(p.x);
+                coords.push(p.y);
+            }
+            ids.extend_from_slice(ring);
         }
 
         match earcutr::earcut(&coords, &hole_starts, 2) {
@@ -996,19 +1354,81 @@ fn triangulate_cap(
     }
 }
 
+/// Applique une table de fusion de sommets aux triangles.
+fn remap_tris(tris: &mut [[u32; 3]], remap: &HashMap<u32, u32>) {
+    if remap.is_empty() {
+        return;
+    }
+    for tri in tris.iter_mut() {
+        for id in tri.iter_mut() {
+            if let Some(&r) = remap.get(id) {
+                *id = r;
+            }
+        }
+    }
+}
+
 fn build_mesh(tris: &[[u32; 3]], colors: &[[u8; 3]], pos: &[DVec3], colored: bool) -> Mesh {
-    let positions: Vec<[f32; 3]> = pos
-        .iter()
-        .map(|p| [p.x as f32, p.y as f32, p.z as f32])
-        .collect();
-    let mut indices: Vec<u32> = Vec::with_capacity(tris.len() * 3);
+    // Soudure par position : le recalage des boucles de bouchon crée des
+    // sommets distincts à la même position que ceux de la surface clippée.
+    // Sans cette soudure, les bouchons ne referment pas le maillage.
+    let mut min = DVec3::splat(f64::INFINITY);
+    let mut max = DVec3::splat(f64::NEG_INFINITY);
     for t in tris {
-        indices.extend_from_slice(t);
+        for &i in t {
+            let p = pos[i as usize];
+            min = min.min(p);
+            max = max.max(p);
+        }
+    }
+    let diag = if min.is_finite() {
+        (max - min).length().max(1.0)
+    } else {
+        1.0
+    };
+    let eps = (diag * 1e-6).max(1e-5);
+    let inv = 1.0 / eps;
+    let mut remap: HashMap<(i64, i64, i64), u32> = HashMap::with_capacity(pos.len());
+    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(pos.len());
+    let mut indices: Vec<u32> = Vec::with_capacity(tris.len() * 3);
+    let track_colors = colored && colors.len() == tris.len();
+    let mut out_colors: Vec<[u8; 3]> = if track_colors {
+        Vec::with_capacity(tris.len())
+    } else {
+        Vec::new()
+    };
+    for (ti, t) in tris.iter().enumerate() {
+        let mut ids = [0u32; 3];
+        for (k, &i) in t.iter().enumerate() {
+            let p = pos[i as usize];
+            let key = (
+                (p.x * inv).round() as i64,
+                (p.y * inv).round() as i64,
+                (p.z * inv).round() as i64,
+            );
+            ids[k] = *remap.entry(key).or_insert_with(|| {
+                let id = positions.len() as u32;
+                positions.push([p.x as f32, p.y as f32, p.z as f32]);
+                id
+            });
+        }
+        if ids[0] == ids[1] || ids[1] == ids[2] || ids[0] == ids[2] {
+            continue;
+        }
+        indices.extend_from_slice(&ids);
+        if track_colors {
+            out_colors.push(colors[ti]);
+        }
     }
     let mut mesh = Mesh::from_indexed(positions, indices);
     mesh.compact();
-    if colored && colors.len() == tris.len() {
-        mesh.set_tri_colors(colors.to_vec());
+    if track_colors {
+        mesh.set_tri_colors(out_colors);
+    }
+    for _ in 0..4 {
+        if mesh.seal_open_boundaries() == 0 {
+            break;
+        }
     }
     mesh
 }

@@ -390,6 +390,200 @@ impl Mesh {
         edges.values().filter(|&&c| c == 1).count()
     }
 
+    /// Referme les arêtes ouvertes en comblant chaque boucle de bord par un
+    /// éventail depuis son barycentre.
+    ///
+    /// La découpe peut laisser de fines fissures sur le plan de coupe lorsque
+    /// la triangulation du bouchon ne reprend pas exactement le contour de la
+    /// surface. Ces boucles sont comblées ici pour garantir un maillage
+    /// étanche, sans changer le volume de manière mesurable (les fissures sont
+    /// d'épaisseur quasi nulle).
+    ///
+    /// Renvoie le nombre de triangles ajoutés.
+    pub fn seal_open_boundaries(&mut self) -> usize {
+        if self.indices.is_empty() {
+            return 0;
+        }
+        let mut counts: HashMap<(u32, u32), u32> = HashMap::new();
+        let mut directed: Vec<(u32, u32)> = Vec::with_capacity(self.indices.len());
+        for t in self.indices.chunks_exact(3) {
+            for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                let key = if a < b { (a, b) } else { (b, a) };
+                *counts.entry(key).or_insert(0) += 1;
+                directed.push((a, b));
+            }
+        }
+        let mut next: HashMap<u32, Vec<u32>> = HashMap::new();
+        let mut open_edges: Vec<(u32, u32)> = Vec::new();
+        let mut used: HashMap<(u32, u32), u32> = HashMap::new();
+        for &(a, b) in &directed {
+            let key = if a < b { (a, b) } else { (b, a) };
+            if counts.get(&key).copied().unwrap_or(0) == 1 && a != b {
+                next.entry(a).or_default().push(b);
+                open_edges.push((a, b));
+                *used.entry((a, b)).or_insert(0) += 1;
+            }
+        }
+        if open_edges.is_empty() {
+            return 0;
+        }
+
+        let has_colors = self.has_colors();
+        let mut loops: Vec<Vec<u32>> = Vec::new();
+        let mut trails: Vec<Vec<u32>> = Vec::new();
+        for &(start_a, start_b) in &open_edges {
+            if used.get(&(start_a, start_b)).copied().unwrap_or(0) == 0 {
+                continue;
+            }
+            *used.get_mut(&(start_a, start_b)).unwrap() -= 1;
+            let mut ids = vec![start_a, start_b];
+            let mut cur = start_b;
+            let mut closed = false;
+            for _ in 0..=open_edges.len() {
+                if cur == start_a {
+                    closed = true;
+                    break;
+                }
+                let Some(cands) = next.get(&cur) else {
+                    break;
+                };
+                let prev = ids[ids.len() - 2];
+                let pc = self.positions[cur as usize];
+                let pp = self.positions[prev as usize];
+                let dir = [
+                    pc[0] as f64 - pp[0] as f64,
+                    pc[1] as f64 - pp[1] as f64,
+                    pc[2] as f64 - pp[2] as f64,
+                ];
+                // Suivre l'arête qui prolonge le mieux le contour, pour ne pas
+                // sauter d'une fissure à l'autre aux jonctions non-manifold.
+                let mut best: Option<(f64, u32)> = None;
+                for &n in cands {
+                    if used.get(&(cur, n)).copied().unwrap_or(0) == 0 {
+                        continue;
+                    }
+                    let pn = self.positions[n as usize];
+                    let d = [
+                        pn[0] as f64 - pc[0] as f64,
+                        pn[1] as f64 - pc[1] as f64,
+                        pn[2] as f64 - pc[2] as f64,
+                    ];
+                    let score = dir[0] * d[0] + dir[1] * d[1] + dir[2] * d[2];
+                    if best.map_or(true, |(s, _)| score > s) {
+                        best = Some((score, n));
+                    }
+                }
+                let Some((_, nxt)) = best else {
+                    break;
+                };
+                *used.get_mut(&(cur, nxt)).unwrap() -= 1;
+                ids.push(nxt);
+                cur = nxt;
+            }
+            if closed && ids.len() >= 4 {
+                ids.pop();
+                loops.push(ids);
+            } else if ids.len() >= 2 {
+                // Parcours interrompu (jonction non-manifold) : le chemin sera
+                // refermé par un éventail, puis ses extrémités pontées.
+                trails.push(ids);
+            }
+        }
+
+        let color = if has_colors {
+            self.tri_colors.first().copied().unwrap_or(DEFAULT_COLOR)
+        } else {
+            DEFAULT_COLOR
+        };
+        let mut added = 0usize;
+
+        for ids in &loops {
+            if ids.len() < 3 {
+                continue;
+            }
+            let center_id = self.fan_center(ids);
+            let n = ids.len();
+            for i in 0..n {
+                let a = ids[i];
+                let b = ids[(i + 1) % n];
+                // Le bord existant est orienté a -> b ; le nouveau triangle
+                // doit contenir b -> a pour refermer le maillage.
+                self.indices.extend_from_slice(&[center_id, b, a]);
+                if has_colors {
+                    self.tri_colors.push(color);
+                }
+                added += 1;
+            }
+        }
+
+        // Chemins interrompus par une jonction non-manifold : on les referme
+        // par un éventail depuis leur premier sommet, puis par deux triangles
+        // opposés qui se compensent (aire nulle) et referment les bords
+        // restants.
+        for ids in &trails {
+            let n = ids.len();
+            if n < 2 {
+                continue;
+            }
+            if n == 2 {
+                let (u, v) = (ids[0], ids[1]);
+                let pu = self.positions[u as usize];
+                let pv = self.positions[v as usize];
+                let cid = self.positions.len() as u32;
+                self.positions.push([
+                    ((pu[0] as f64 + pv[0] as f64) * 0.5) as f32,
+                    ((pu[1] as f64 + pv[1] as f64) * 0.5) as f32,
+                    ((pu[2] as f64 + pv[2] as f64) * 0.5) as f32,
+                ]);
+                // Deux triangles identiques : l'arête du chemin est alors
+                // présente trois fois (impair mais non ouverte).
+                for _ in 0..2 {
+                    self.indices.extend_from_slice(&[u, v, cid]);
+                    if has_colors {
+                        self.tri_colors.push(color);
+                    }
+                    added += 1;
+                }
+                continue;
+            }
+            let a0 = ids[0];
+            for i in 1..n - 1 {
+                self.indices
+                    .extend_from_slice(&[a0, ids[i + 1], ids[i]]);
+                if has_colors {
+                    self.tri_colors.push(color);
+                }
+                added += 1;
+            }
+            for tri in [
+                [ids[1], ids[0], ids[n - 1]],
+                [ids[1], ids[n - 1], ids[0]],
+            ] {
+                self.indices.extend_from_slice(&tri);
+                if has_colors {
+                    self.tri_colors.push(color);
+                }
+                added += 1;
+            }
+        }
+
+        added
+    }
+
+    /// Ajoute un sommet au barycentre de `ids` et renvoie son indice.
+    fn fan_center(&mut self, ids: &[u32]) -> u32 {
+        let mut center = DVec3::ZERO;
+        for &v in ids {
+            let p = self.positions[v as usize];
+            center += DVec3::new(p[0] as f64, p[1] as f64, p[2] as f64);
+        }
+        center /= ids.len().max(1) as f64;
+        let id = self.positions.len() as u32;
+        self.positions
+            .push([center.x as f32, center.y as f32, center.z as f32]);
+        id
+    }
+
     pub fn centroid(&self) -> DVec3 {
         if self.positions.is_empty() {
             return DVec3::ZERO;
